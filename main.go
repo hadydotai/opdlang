@@ -9,12 +9,15 @@ import (
 
 const exampleSource = `
 val i = 0
-val j = 0
 while i < 10 do
+	print(i, " outter!")
+	print("----")
+	val j  = 0
 	while j < 10 do
-		print(i + j)
+		print(j + i, " inner!")
 		val j = j + 1
 	end
+	print("----")
 	val i = i + 1
 end
 `
@@ -37,13 +40,21 @@ func main() {
 	// Create VM and register built-in functions
 	vm := NewVM(bytecode, 1024, 1024)
 
+	// Register the strings from the compiler
+	vm.RegisterStrings(compiler.strings)
+
 	// Register the print function
-	vm.RegisterFunction(builtinFunctions["print"], func(args []int) int {
+	vm.RegisterFunction(0, func(args []Value) Value {
 		for _, arg := range args {
-			fmt.Printf("%d ", arg)
+			switch v := arg.(type) {
+			case IntValue:
+				fmt.Print(int(v))
+			case StringValue:
+				fmt.Print(vm.currentState.Strings[v.Index])
+			}
 		}
 		fmt.Println()
-		return 0
+		return IntValue(0)
 	})
 
 	// Run the program

@@ -11,6 +11,7 @@ var (
 		{Name: "Keyword", Pattern: `\b(val|if|then|else|end|while|do)\b`},
 		{Name: "comment", Pattern: `//.*|/\*.*?\*/`},
 		{Name: "whitespace", Pattern: `\s+`},
+		{Name: "String", Pattern: `"[^"]*"`},
 		{Name: "Ident", Pattern: `\b([a-zA-Z_][a-zA-Z0-9_]*)\b`},
 		{Name: "Punct", Pattern: `==|!=|<=|>=|[-,()*/+%{};&!=:<>\[\]]`},
 		{Name: "Int", Pattern: `\d+`},
@@ -46,6 +47,7 @@ type Expr struct {
 
 type Term struct {
 	Number   *int    `  @Int`
+	String   *string `| @String`
 	Call     *Call   `| @@`
 	Variable *string `| @Ident`
 	SubExpr  *Expr   `| "(" @@ ")"`
@@ -73,9 +75,11 @@ type Compiler struct {
 	labels     map[string]int
 	vars       map[string]int
 	funcs      map[string]int
+	strings    map[string]int
 	nextVar    int
 	nextLabel  int
 	nextFunc   int
+	nextString int
 	currentPos int
 }
 
@@ -85,9 +89,11 @@ func NewCompiler() *Compiler {
 		labels:     make(map[string]int),
 		vars:       make(map[string]int),
 		funcs:      make(map[string]int),
+		strings:    make(map[string]int),
 		nextVar:    0,
 		nextLabel:  0,
 		nextFunc:   0,
+		nextString: 0,
 		currentPos: 0,
 	}
 }
@@ -102,8 +108,7 @@ func (c *Compiler) DebugPrint() {
 		isJumpOperand := false
 		if i > 0 {
 			prevInstr := Instr(c.code[i-1])
-			if prevInstr == InstrJmp || prevInstr == InstrJmpIfZero ||
-				prevInstr == InstrJmpIfNeg || prevInstr == InstrJmpIfPos {
+			if prevInstr == InstrJmp || prevInstr == InstrJmpIfZero {
 				isJumpOperand = true
 			}
 		}
@@ -189,7 +194,7 @@ func (c *Compiler) DebugPrint() {
 					}
 					i += 2
 				}
-			case InstrJmp, InstrJmpIfZero, InstrJmpIfNeg, InstrJmpIfPos:
+			case InstrJmp, InstrJmpIfZero:
 				if i+2 < len(c.code) {
 					jumpAddr := (int(c.code[i+1]) << 8) | int(c.code[i+2])
 					// Find label by address
@@ -206,10 +211,6 @@ func (c *Compiler) DebugPrint() {
 							fmt.Printf("\t\x1b[31m→ %s (addr: %d)\x1b[0m", labelName, jumpAddr)
 						case InstrJmpIfZero:
 							fmt.Printf("\t\x1b[31m→ %s (addr: %d) if zero\x1b[0m", labelName, jumpAddr)
-						case InstrJmpIfNeg:
-							fmt.Printf("\t\x1b[31m→ %s (addr: %d) if neg\x1b[0m", labelName, jumpAddr)
-						case InstrJmpIfPos:
-							fmt.Printf("\t\x1b[31m→ %s (addr: %d) if pos\x1b[0m", labelName, jumpAddr)
 						}
 					} else {
 						switch instr {
@@ -217,10 +218,6 @@ func (c *Compiler) DebugPrint() {
 							fmt.Printf("\t\x1b[36m→ %s (addr: %d)\x1b[0m", labelName, jumpAddr)
 						case InstrJmpIfZero:
 							fmt.Printf("\t\x1b[36m→ %s (addr: %d) if zero\x1b[0m", labelName, jumpAddr)
-						case InstrJmpIfNeg:
-							fmt.Printf("\t\x1b[36m→ %s (addr: %d) if neg\x1b[0m", labelName, jumpAddr)
-						case InstrJmpIfPos:
-							fmt.Printf("\t\x1b[36m→ %s (addr: %d) if pos\x1b[0m", labelName, jumpAddr)
 						}
 					}
 					i += 2
@@ -250,6 +247,11 @@ func (c *Compiler) DebugPrint() {
 	}
 	for name, idx := range c.funcs {
 		fmt.Printf("  %s -> func_%d\n", name, idx)
+	}
+
+	fmt.Println("\nStrings:")
+	for str, idx := range c.strings {
+		fmt.Printf("  %q -> str_%d\n", str, idx)
 	}
 }
 
@@ -372,14 +374,12 @@ func (c *Compiler) compileStatement(stmt *Statement) {
 		c.currentPos += 2
 
 		// Set end label and patch the conditional jump
-		endAddr := c.currentPos // Use current position BEFORE setting the label
-		c.setLabel(endLabel)    // Now set the label
+		c.setLabel(endLabel)
+		endAddr := c.labels[endLabel]
 
 		// Patch the jump-if-zero instruction with the correct end address
-		c.code = append(c.code[:jumpToEndPos], append([]byte{
-			byte(endAddr >> 8),
-			byte(endAddr & 0xff),
-		}, c.code[jumpToEndPos+2:]...)...)
+		c.code[jumpToEndPos] = byte(endAddr >> 8)
+		c.code[jumpToEndPos+1] = byte(endAddr & 0xff)
 
 	case stmt.Call != nil:
 		c.compileCall(stmt.Call)
@@ -423,6 +423,9 @@ func (c *Compiler) compileTerm(term *Term) {
 	switch {
 	case term.Number != nil:
 		c.emit(InstrPush, byte(*term.Number))
+	case term.String != nil:
+		stringIdx := c.internString(*term.String)
+		c.emit(InstrPushStr, byte(stringIdx))
 	case term.Variable != nil:
 		varIdx := c.getVarIdx(*term.Variable)
 		c.emit(InstrLoad, byte(varIdx))
@@ -442,4 +445,16 @@ func (c *Compiler) compileCall(call *Call) {
 	// Get function index and emit call instruction
 	funcIdx := c.getFuncIdx(call.Function)
 	c.emit(InstrCall, byte(funcIdx), byte(len(call.Args)))
+}
+
+func (c *Compiler) internString(s string) int {
+	// Remove quotes from the string literal
+	s = s[1 : len(s)-1]
+
+	if idx, ok := c.strings[s]; ok {
+		return idx
+	}
+	c.strings[s] = c.nextString
+	c.nextString++
+	return c.nextString - 1
 }

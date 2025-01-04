@@ -16,27 +16,30 @@ const (
 
 type VMState struct {
 	PC          int
-	Stack       []int
-	Locals      []int
+	Stack       []Value
+	Locals      []Value
 	Memory      []byte
 	CallStack   []int
 	ReturnStack []int
+	Strings     []string
 }
 
 func (vm *VMState) Clone() *VMState {
 	newState := &VMState{
 		PC:          vm.PC,
-		Stack:       make([]int, len(vm.Stack)),
-		Locals:      make([]int, len(vm.Locals)),
+		Stack:       make([]Value, len(vm.Stack)),
+		Locals:      make([]Value, len(vm.Locals)),
 		Memory:      make([]byte, len(vm.Memory)),
 		CallStack:   make([]int, len(vm.CallStack)),
 		ReturnStack: make([]int, len(vm.ReturnStack)),
+		Strings:     make([]string, len(vm.Strings)),
 	}
 	copy(newState.Stack, vm.Stack)
 	copy(newState.Locals, vm.Locals)
 	copy(newState.Memory, vm.Memory)
 	copy(newState.CallStack, vm.CallStack)
 	copy(newState.ReturnStack, vm.ReturnStack)
+	copy(newState.Strings, vm.Strings)
 	return newState
 }
 
@@ -44,6 +47,7 @@ type Instr byte
 
 const (
 	InstrPush Instr = iota
+	InstrPushStr
 	InstrPop
 	InstrAdd
 	InstrSub
@@ -60,8 +64,6 @@ const (
 	InstrStore
 	InstrJmp
 	InstrJmpIfZero
-	InstrJmpIfNeg
-	InstrJmpIfPos
 	InstrCall
 	InstrRet
 	InstrHalt
@@ -69,18 +71,38 @@ const (
 
 func (instr Instr) String() string {
 	names := []string{
-		"PUSH", "POP", "ADD", "SUB", "MUL", "DIV", "MOD",
+		"PUSH", "PUSH_STR", "POP", "ADD", "SUB", "MUL", "DIV", "MOD",
 		"EQ", "NEQ", "LT", "GT", "LTE", "GTE", "LOAD",
-		"STORE", "JMP", "JMP_IF_ZERO", "JMP_IF_NEG",
-		"JMP_IF_POS", "CALL", "RET", "HALT",
+		"STORE", "JMP", "JMP_IF_ZERO", "CALL", "RET", "HALT",
 	}
 	if int(instr) < len(names) {
 		return names[instr]
 	}
-	return "UNKNOWN"
+	return fmt.Sprintf("UNKNOWN(%d)", instr)
 }
 
-type GoFunction func(args []int) int
+type ValueType int
+
+const (
+	ValueTypeInt ValueType = iota
+	ValueTypeString
+)
+
+type Value interface {
+	Type() ValueType
+}
+
+type IntValue int
+
+func (i IntValue) Type() ValueType { return ValueTypeInt }
+
+type StringValue struct {
+	Index int
+}
+
+func (s StringValue) Type() ValueType { return ValueTypeString }
+
+type GoFunction func(args []Value) Value
 
 type VM struct {
 	currentState *VMState
@@ -100,9 +122,10 @@ func NewVM(bytecode []byte, stackSize, localsSize int) *VM {
 	return &VM{
 		bytecode: bytecode,
 		currentState: &VMState{
-			Stack:  make([]int, 0, stackSize),
-			Locals: make([]int, 0, localsSize),
-			Memory: make([]byte, 0, 1024),
+			Stack:   make([]Value, 0, stackSize),
+			Locals:  make([]Value, 0, localsSize),
+			Memory:  make([]byte, 0, 1024),
+			Strings: make([]string, 0),
 		},
 		debugChan:   make(chan DebuggerCmd),
 		stateChan:   make(chan *VMState),
@@ -207,6 +230,8 @@ func (vm *VM) execute() {
 
 func (vm *VM) executeInstruction() error {
 	instruction := vm.bytecode[vm.currentState.PC]
+	// fmt.Printf("Executing instruction at PC=%d: %v\n", vm.currentState.PC, Instr(instruction))
+	// fmt.Printf("Stack before: %v\n", vm.currentState.Stack)
 	vm.currentState.PC++
 
 	switch Instr(instruction) {
@@ -244,19 +269,20 @@ func (vm *VM) executeInstruction() error {
 		return vm.executeJmp()
 	case InstrJmpIfZero:
 		return vm.executeJmpIfZero()
-	case InstrJmpIfNeg:
-		return vm.executeJmpIfNeg()
-	case InstrJmpIfPos:
-		return vm.executeJmpIfPos()
 	case InstrCall:
 		return vm.executeCall()
 	case InstrRet:
 		return vm.executeRet()
 	case InstrHalt:
 		return vm.executeHalt()
+	case InstrPushStr:
+		return vm.executePushStr()
 	default:
 		return fmt.Errorf("unknown instruction: %d", instruction)
 	}
+
+	// fmt.Printf("Stack after: %v\n", vm.currentState.Stack)
+	// return nil
 }
 
 func (vm *VM) executePush() error {
@@ -264,7 +290,7 @@ func (vm *VM) executePush() error {
 		return fmt.Errorf("program counter out of bounds")
 	}
 	value := int(vm.bytecode[vm.currentState.PC])
-	vm.currentState.Stack = append(vm.currentState.Stack, value)
+	vm.currentState.Stack = append(vm.currentState.Stack, IntValue(value))
 	vm.currentState.PC++
 	return nil
 }
@@ -293,8 +319,23 @@ func (vm *VM) executeAdd() error {
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = append(vm.currentState.Stack, a+b)
-	return nil
+
+	switch va := a.(type) {
+	case IntValue:
+		if vb, ok := b.(IntValue); ok {
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)+int(vb)))
+			return nil
+		}
+	case StringValue:
+		if vb, ok := b.(StringValue); ok {
+			// String concatenation
+			newStr := vm.currentState.Strings[va.Index] + vm.currentState.Strings[vb.Index]
+			newIdx := vm.RegisterString(newStr)
+			vm.currentState.Stack = append(vm.currentState.Stack, StringValue{Index: newIdx})
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid operand types for add")
 }
 
 func (vm *VM) executeSub() error {
@@ -304,8 +345,14 @@ func (vm *VM) executeSub() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = append(vm.currentState.Stack, a-b)
-	return nil
+
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)-int(vb)))
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid operand types for sub")
 }
 
 func (vm *VM) executeMul() error {
@@ -315,8 +362,14 @@ func (vm *VM) executeMul() error {
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = append(vm.currentState.Stack, a*b)
-	return nil
+
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)*int(vb)))
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid operand types for mul")
 }
 
 func (vm *VM) executeDiv() error {
@@ -326,8 +379,14 @@ func (vm *VM) executeDiv() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = append(vm.currentState.Stack, a/b)
-	return nil
+
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)/int(vb)))
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid operand types for div")
 }
 
 func (vm *VM) executeMod() error {
@@ -337,8 +396,14 @@ func (vm *VM) executeMod() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = append(vm.currentState.Stack, a%b)
-	return nil
+
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)%int(vb)))
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid operand types for mod")
 }
 
 func (vm *VM) executeEq() error {
@@ -348,27 +413,57 @@ func (vm *VM) executeEq() error {
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if a == b {
-		vm.currentState.Stack = append(vm.currentState.Stack, 1)
-	} else {
-		vm.currentState.Stack = append(vm.currentState.Stack, 0)
+
+	switch va := a.(type) {
+	case IntValue:
+		if vb, ok := b.(IntValue); ok {
+			result := 0
+			if int(va) == int(vb) {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
+	case StringValue:
+		if vb, ok := b.(StringValue); ok {
+			result := 0
+			if vm.currentState.Strings[va.Index] == vm.currentState.Strings[vb.Index] {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("invalid operand types for equality")
 }
 
 func (vm *VM) executeNeq() error {
 	if len(vm.currentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
+	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
+	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = append(vm.currentState.Stack, 1)
-	if a != b {
-		return nil
+	switch va := a.(type) {
+	case IntValue:
+		if vb, ok := b.(IntValue); ok {
+			result := 0
+			if int(va) != int(vb) {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
+	case StringValue:
+		if vb, ok := b.(StringValue); ok {
+			result := 0
+			if vm.currentState.Strings[va.Index] != vm.currentState.Strings[vb.Index] {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
 	}
-	vm.currentState.Stack = append(vm.currentState.Stack, 0)
-	vm.currentState.PC += 2
 	return nil
 }
 
@@ -376,15 +471,21 @@ func (vm *VM) executeLt() error {
 	if len(vm.currentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
+	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
+	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if b < a {
-		vm.currentState.Stack = append(vm.currentState.Stack, 1)
-	} else {
-		vm.currentState.Stack = append(vm.currentState.Stack, 0)
+
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			result := 0
+			if int(va) < int(vb) {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("invalid operand types for less than")
 }
 
 func (vm *VM) executeGt() error {
@@ -394,10 +495,15 @@ func (vm *VM) executeGt() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if b > a {
-		vm.currentState.Stack = append(vm.currentState.Stack, 1)
-	} else {
-		vm.currentState.Stack = append(vm.currentState.Stack, 0)
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			result := 0
+			if int(va) > int(vb) {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
 	}
 	return nil
 }
@@ -409,10 +515,15 @@ func (vm *VM) executeLte() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if b <= a {
-		vm.currentState.Stack = append(vm.currentState.Stack, 1)
-	} else {
-		vm.currentState.Stack = append(vm.currentState.Stack, 0)
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			result := 0
+			if int(va) <= int(vb) {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
 	}
 	return nil
 }
@@ -424,10 +535,15 @@ func (vm *VM) executeGte() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if b >= a {
-		vm.currentState.Stack = append(vm.currentState.Stack, 1)
-	} else {
-		vm.currentState.Stack = append(vm.currentState.Stack, 0)
+	if va, ok := a.(IntValue); ok {
+		if vb, ok := b.(IntValue); ok {
+			result := 0
+			if int(va) >= int(vb) {
+				result = 1
+			}
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			return nil
+		}
 	}
 	return nil
 }
@@ -453,8 +569,10 @@ func (vm *VM) executeStore() error {
 		return fmt.Errorf("stack underflow")
 	}
 	varIdx := int(vm.bytecode[vm.currentState.PC])
-	if varIdx >= len(vm.currentState.Locals)-1 {
-		vm.currentState.Locals = append(vm.currentState.Locals, 0)
+	if varIdx >= len(vm.currentState.Locals) {
+		newLocals := make([]Value, varIdx+1)
+		copy(newLocals, vm.currentState.Locals)
+		vm.currentState.Locals = newLocals
 	}
 	vm.currentState.Locals[varIdx] = vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
@@ -490,7 +608,7 @@ func (vm *VM) executeJmpIfZero() error {
 	// Pop the condition value
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
 
-	if condition == 0 {
+	if condition == IntValue(0) {
 		vm.currentState.PC = jumpAddr
 	} else {
 		vm.currentState.PC += 2 // Skip over jump address
@@ -514,31 +632,7 @@ func (vm *VM) executeJmpIfNeg() error {
 	// Pop the condition value
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
 
-	if condition < 0 {
-		vm.currentState.PC = jumpAddr
-	} else {
-		vm.currentState.PC += 2 // Skip over jump address
-	}
-	return nil
-}
-
-func (vm *VM) executeJmpIfPos() error {
-	if len(vm.currentState.Stack) == 0 {
-		return fmt.Errorf("stack underflow")
-	}
-	// Read two bytes for jump address
-	if vm.currentState.PC+1 >= len(vm.bytecode) {
-		return fmt.Errorf("invalid jump address")
-	}
-	highByte := int(vm.bytecode[vm.currentState.PC])
-	lowByte := int(vm.bytecode[vm.currentState.PC+1])
-	jumpAddr := (highByte << 8) | lowByte
-
-	condition := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	// Pop the condition value
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
-
-	if condition > 0 {
+	if condition == IntValue(0) {
 		vm.currentState.PC = jumpAddr
 	} else {
 		vm.currentState.PC += 2 // Skip over jump address
@@ -551,7 +645,7 @@ func (vm *VM) executeCall() error {
 
 	if fn, ok := vm.functions[funcIdx]; ok {
 		numArgs := int(vm.bytecode[vm.currentState.PC+1])
-		args := make([]int, numArgs)
+		args := make([]Value, numArgs)
 		for i := numArgs - 1; i >= 0; i-- {
 			if len(vm.currentState.Stack) == 0 {
 				return fmt.Errorf("stack underflow while getting function arguments")
@@ -567,7 +661,7 @@ func (vm *VM) executeCall() error {
 	}
 
 	vm.currentState.CallStack = append(vm.currentState.CallStack, vm.currentState.PC)
-	vm.currentState.PC = vm.currentState.Locals[vm.currentState.PC]
+	vm.currentState.PC = int(vm.currentState.Locals[vm.currentState.PC].(IntValue))
 	vm.currentState.PC++
 	return nil
 }
@@ -587,6 +681,46 @@ func (vm *VM) executeHalt() error {
 	return nil
 }
 
+func (vm *VM) executePushStr() error {
+	if vm.currentState.PC >= len(vm.bytecode) {
+		return fmt.Errorf("program counter out of bounds")
+	}
+	strIdx := int(vm.bytecode[vm.currentState.PC])
+	if strIdx >= len(vm.currentState.Strings) {
+		return fmt.Errorf("string index out of bounds: %d", strIdx)
+	}
+	vm.currentState.Stack = append(vm.currentState.Stack, StringValue{Index: strIdx})
+	vm.currentState.PC++
+	return nil
+}
+
 func (vm *VM) RegisterFunction(idx int, fn GoFunction) {
 	vm.functions[idx] = fn
+}
+
+func (vm *VM) RegisterString(s string) int {
+	vm.currentState.Strings = append(vm.currentState.Strings, s)
+	return len(vm.currentState.Strings) - 1
+}
+
+func (vm *VM) RegisterStrings(strings map[string]int) {
+	// Pre-allocate space in the strings slice
+	maxIdx := -1
+	for _, idx := range strings {
+		if idx > maxIdx {
+			maxIdx = idx
+		}
+	}
+
+	// Resize the strings slice if needed
+	if maxIdx >= len(vm.currentState.Strings) {
+		newStrings := make([]string, maxIdx+1)
+		copy(newStrings, vm.currentState.Strings)
+		vm.currentState.Strings = newStrings
+	}
+
+	// Register all strings at their correct indices
+	for str, idx := range strings {
+		vm.currentState.Strings[idx] = str
+	}
 }
