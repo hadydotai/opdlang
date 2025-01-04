@@ -67,6 +67,19 @@ const (
 	InstrHalt
 )
 
+func (instr Instr) String() string {
+	names := []string{
+		"PUSH", "POP", "ADD", "SUB", "MUL", "DIV", "MOD",
+		"EQ", "NEQ", "LT", "GT", "LTE", "GTE", "LOAD",
+		"STORE", "JMP", "JMP_IF_ZERO", "JMP_IF_NEG",
+		"JMP_IF_POS", "CALL", "RET", "HALT",
+	}
+	if int(instr) < len(names) {
+		return names[instr]
+	}
+	return "UNKNOWN"
+}
+
 type GoFunction func(args []int) int
 
 type VM struct {
@@ -87,9 +100,9 @@ func NewVM(bytecode []byte, stackSize, localsSize int) *VM {
 	return &VM{
 		bytecode: bytecode,
 		currentState: &VMState{
-			Stack:  make([]int, stackSize),
-			Locals: make([]int, localsSize),
-			Memory: make([]byte, 1024),
+			Stack:  make([]int, 0, stackSize),
+			Locals: make([]int, 0, localsSize),
+			Memory: make([]byte, 0, 1024),
 		},
 		debugChan:   make(chan DebuggerCmd),
 		stateChan:   make(chan *VMState),
@@ -292,7 +305,6 @@ func (vm *VM) executeSub() error {
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = append(vm.currentState.Stack, a-b)
-	vm.currentState.PC += 2
 	return nil
 }
 
@@ -315,7 +327,6 @@ func (vm *VM) executeDiv() error {
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = append(vm.currentState.Stack, a/b)
-	vm.currentState.PC += 2
 	return nil
 }
 
@@ -327,7 +338,6 @@ func (vm *VM) executeMod() error {
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = append(vm.currentState.Stack, a%b)
-	vm.currentState.PC += 2
 	return nil
 }
 
@@ -369,7 +379,7 @@ func (vm *VM) executeLt() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if a < b {
+	if b < a {
 		vm.currentState.Stack = append(vm.currentState.Stack, 1)
 	} else {
 		vm.currentState.Stack = append(vm.currentState.Stack, 0)
@@ -384,7 +394,7 @@ func (vm *VM) executeGt() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if a > b {
+	if b > a {
 		vm.currentState.Stack = append(vm.currentState.Stack, 1)
 	} else {
 		vm.currentState.Stack = append(vm.currentState.Stack, 0)
@@ -399,7 +409,7 @@ func (vm *VM) executeLte() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if a <= b {
+	if b <= a {
 		vm.currentState.Stack = append(vm.currentState.Stack, 1)
 	} else {
 		vm.currentState.Stack = append(vm.currentState.Stack, 0)
@@ -414,7 +424,7 @@ func (vm *VM) executeGte() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
-	if a >= b {
+	if b >= a {
 		vm.currentState.Stack = append(vm.currentState.Stack, 1)
 	} else {
 		vm.currentState.Stack = append(vm.currentState.Stack, 0)
@@ -443,8 +453,8 @@ func (vm *VM) executeStore() error {
 		return fmt.Errorf("stack underflow")
 	}
 	varIdx := int(vm.bytecode[vm.currentState.PC])
-	if varIdx >= len(vm.currentState.Locals) {
-		return fmt.Errorf("variable index out of bounds: %d", varIdx)
+	if varIdx >= len(vm.currentState.Locals)-1 {
+		vm.currentState.Locals = append(vm.currentState.Locals, 0)
 	}
 	vm.currentState.Locals[varIdx] = vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]

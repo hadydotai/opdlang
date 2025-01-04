@@ -128,7 +128,11 @@ func (c *Compiler) DebugPrint() {
 							break
 						}
 					}
-					fmt.Printf("\t\x1b[36m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					if varName == "?" {
+						fmt.Printf("\t\x1b[31m→ %s\x1b[0m (var_%d)", varName, c.code[i+1])
+					} else {
+						fmt.Printf("\t\x1b[36m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					}
 					i++
 				}
 			case InstrLoad:
@@ -141,7 +145,11 @@ func (c *Compiler) DebugPrint() {
 							break
 						}
 					}
-					fmt.Printf("\t\x1b[36mload %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					if varName == "?" {
+						fmt.Printf("\t\x1b[31mload %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					} else {
+						fmt.Printf("\t\x1b[36mload %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					}
 					i++
 				}
 			case InstrStore:
@@ -154,7 +162,11 @@ func (c *Compiler) DebugPrint() {
 							break
 						}
 					}
-					fmt.Printf("\t\x1b[36m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					if varName == "?" {
+						fmt.Printf("\t\x1b[31m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					} else {
+						fmt.Printf("\t\x1b[36m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
+					}
 					i++
 				}
 			case InstrCall:
@@ -168,8 +180,13 @@ func (c *Compiler) DebugPrint() {
 							break
 						}
 					}
-					fmt.Printf("\t\x1b[36m%s (func_%d) with %d args\x1b[0m",
-						funcName, c.code[i+1], c.code[i+2])
+					if funcName == "?" {
+						fmt.Printf("\t\x1b[31m%s (func_%d) with %d args\x1b[0m",
+							funcName, c.code[i+1], c.code[i+2])
+					} else {
+						fmt.Printf("\t\x1b[36m%s (func_%d) with %d args\x1b[0m",
+							funcName, c.code[i+1], c.code[i+2])
+					}
 					i += 2
 				}
 			case InstrJmp, InstrJmpIfZero, InstrJmpIfNeg, InstrJmpIfPos:
@@ -183,15 +200,28 @@ func (c *Compiler) DebugPrint() {
 							break
 						}
 					}
-					switch instr {
-					case InstrJmp:
-						fmt.Printf("\t\x1b[36m→ %s (addr: %d)\x1b[0m", labelName, jumpAddr)
-					case InstrJmpIfZero:
-						fmt.Printf("\t\x1b[36m→ %s (addr: %d) if zero\x1b[0m", labelName, jumpAddr)
-					case InstrJmpIfNeg:
-						fmt.Printf("\t\x1b[36m→ %s (addr: %d) if neg\x1b[0m", labelName, jumpAddr)
-					case InstrJmpIfPos:
-						fmt.Printf("\t\x1b[36m→ %s (addr: %d) if pos\x1b[0m", labelName, jumpAddr)
+					if labelName == "?" {
+						switch instr {
+						case InstrJmp:
+							fmt.Printf("\t\x1b[31m→ %s (addr: %d)\x1b[0m", labelName, jumpAddr)
+						case InstrJmpIfZero:
+							fmt.Printf("\t\x1b[31m→ %s (addr: %d) if zero\x1b[0m", labelName, jumpAddr)
+						case InstrJmpIfNeg:
+							fmt.Printf("\t\x1b[31m→ %s (addr: %d) if neg\x1b[0m", labelName, jumpAddr)
+						case InstrJmpIfPos:
+							fmt.Printf("\t\x1b[31m→ %s (addr: %d) if pos\x1b[0m", labelName, jumpAddr)
+						}
+					} else {
+						switch instr {
+						case InstrJmp:
+							fmt.Printf("\t\x1b[36m→ %s (addr: %d)\x1b[0m", labelName, jumpAddr)
+						case InstrJmpIfZero:
+							fmt.Printf("\t\x1b[36m→ %s (addr: %d) if zero\x1b[0m", labelName, jumpAddr)
+						case InstrJmpIfNeg:
+							fmt.Printf("\t\x1b[36m→ %s (addr: %d) if neg\x1b[0m", labelName, jumpAddr)
+						case InstrJmpIfPos:
+							fmt.Printf("\t\x1b[36m→ %s (addr: %d) if pos\x1b[0m", labelName, jumpAddr)
+						}
 					}
 					i += 2
 				}
