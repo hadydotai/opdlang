@@ -21,6 +21,15 @@ while i < 10 do
 	val i = i + 1
 end
 `
+const exampleSource2 = `
+val i = 0
+while i < 1 do
+	print(i, "i")
+	print("+++")
+	print(i + 1, "i + 1")
+	val i = i + 1
+end
+`
 
 func main() {
 	// Parse and compile the source
@@ -28,7 +37,7 @@ func main() {
 		participle.Lexer(basicLexer),
 	)
 
-	program, err := parser.ParseString("", exampleSource)
+	program, err := parser.ParseString("", exampleSource2)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -45,7 +54,10 @@ func main() {
 
 	// Register the print function
 	vm.RegisterFunction(0, func(args []Value) Value {
-		for _, arg := range args {
+		for i, arg := range args {
+			if i > 0 {
+				fmt.Print(" ") // Add space between arguments
+			}
 			switch v := arg.(type) {
 			case IntValue:
 				fmt.Print(int(v))

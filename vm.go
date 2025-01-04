@@ -234,7 +234,7 @@ func (vm *VM) executeInstruction() error {
 	// fmt.Printf("Stack before: %v\n", vm.currentState.Stack)
 	vm.currentState.PC++
 
-	switch Instr(instruction) {
+	switch inst := Instr(instruction); inst {
 	case InstrPush:
 		return vm.executePush()
 	case InstrPop:
@@ -570,9 +570,7 @@ func (vm *VM) executeStore() error {
 	}
 	varIdx := int(vm.bytecode[vm.currentState.PC])
 	if varIdx >= len(vm.currentState.Locals) {
-		newLocals := make([]Value, varIdx+1)
-		copy(newLocals, vm.currentState.Locals)
-		vm.currentState.Locals = newLocals
+		vm.currentState.Locals = append(vm.currentState.Locals, nil)
 	}
 	vm.currentState.Locals[varIdx] = vm.currentState.Stack[len(vm.currentState.Stack)-1]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
@@ -642,9 +640,10 @@ func (vm *VM) executeJmpIfNeg() error {
 
 func (vm *VM) executeCall() error {
 	funcIdx := int(vm.bytecode[vm.currentState.PC])
+	numArgs := int(vm.bytecode[vm.currentState.PC+1])
 
 	if fn, ok := vm.functions[funcIdx]; ok {
-		numArgs := int(vm.bytecode[vm.currentState.PC+1])
+		// Get arguments in the correct order
 		args := make([]Value, numArgs)
 		for i := numArgs - 1; i >= 0; i-- {
 			if len(vm.currentState.Stack) == 0 {
@@ -663,7 +662,7 @@ func (vm *VM) executeCall() error {
 	vm.currentState.CallStack = append(vm.currentState.CallStack, vm.currentState.PC)
 	vm.currentState.PC = int(vm.currentState.Locals[vm.currentState.PC].(IntValue))
 	vm.currentState.PC++
-	return nil
+	return fmt.Errorf("unknown function index: %d", funcIdx)
 }
 
 func (vm *VM) executeRet() error {

@@ -416,6 +416,8 @@ func (c *Compiler) compileExpr(expr *Expr) {
 		case ">=":
 			c.emit(InstrGte)
 		}
+		// Remove the POP instruction generation - the result should stay on the stack
+		// until it's explicitly stored or used by another operation
 	}
 }
 
@@ -437,7 +439,10 @@ func (c *Compiler) compileTerm(term *Term) {
 }
 
 func (c *Compiler) compileCall(call *Call) {
-	// First compile the arguments
+	fmt.Printf("Compiling call to %s with %d arguments\n", call.Function, len(call.Args))
+
+	// First compile the arguments in the correct order
+	// (we don't need to reverse them anymore since the VM handles the stack correctly)
 	for _, arg := range call.Args {
 		c.compileExpr(arg)
 	}
