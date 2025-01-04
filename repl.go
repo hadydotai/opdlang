@@ -110,7 +110,10 @@ func (r *REPL) printState(state *VMState) {
 		return
 	}
 
-	fmt.Printf("PC: %d (Instruction: %s)\n", state.PC, Instr(r.vm.bytecode[state.PC]))
+	fmt.Printf("Line %d, PC: %d (Instruction: %s)\n",
+		state.SourceLine,
+		state.PC,
+		Instr(r.vm.bytecode[state.PC]))
 	fmt.Println("Stack:", r.formatStack(state.Stack))
 	fmt.Println("Locals:", r.formatStack(state.Locals))
 }

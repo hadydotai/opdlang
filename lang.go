@@ -35,6 +35,7 @@ type Statement struct {
 }
 
 type Assignment struct {
+	Pos      lexer.Position
 	Variable string `"val" @Ident "="`
 	Expr     *Expr  `@@`
 }
@@ -46,6 +47,7 @@ type Expr struct {
 }
 
 type Term struct {
+	Pos      lexer.Position
 	Number   *int    `  @Int`
 	String   *string `| @String`
 	Call     *Call   `| @@`
@@ -60,41 +62,47 @@ type Call struct {
 }
 
 type IfStmt struct {
+	Pos       lexer.Position
 	Condition *Expr       `"if" @@ "then"?`
 	Then      []Statement `@@+`
 	Else      []Statement `("else" @@+)? "end"`
 }
 
 type WhileStmt struct {
+	Pos       lexer.Position
 	Condition *Expr       `"while" @@ "do"`
 	Body      []Statement `@@+ "end"`
 }
 
 type Compiler struct {
-	code       []byte
-	labels     map[string]int
-	vars       map[string]int
-	funcs      map[string]int
-	strings    map[string]int
-	nextVar    int
-	nextLabel  int
-	nextFunc   int
-	nextString int
-	currentPos int
+	code        []byte
+	labels      map[string]int
+	vars        map[string]int
+	funcs       map[string]int
+	strings     map[string]int
+	nextVar     int
+	nextLabel   int
+	nextFunc    int
+	nextString  int
+	currentPos  int
+	currentLine int
+	sourceMap   map[int]int
 }
 
 func NewCompiler() *Compiler {
 	return &Compiler{
-		code:       make([]byte, 0),
-		labels:     make(map[string]int),
-		vars:       make(map[string]int),
-		funcs:      make(map[string]int),
-		strings:    make(map[string]int),
-		nextVar:    0,
-		nextLabel:  0,
-		nextFunc:   0,
-		nextString: 0,
-		currentPos: 0,
+		code:        make([]byte, 0),
+		labels:      make(map[string]int),
+		vars:        make(map[string]int),
+		funcs:       make(map[string]int),
+		strings:     make(map[string]int),
+		nextVar:     0,
+		nextLabel:   0,
+		nextFunc:    0,
+		nextString:  0,
+		currentPos:  0,
+		currentLine: 1,
+		sourceMap:   make(map[int]int),
 	}
 }
 
@@ -240,10 +248,12 @@ func (c *Compiler) compileProgram(program *Program) []byte {
 func (c *Compiler) compileStatement(stmt *Statement) {
 	switch {
 	case stmt.Assignment != nil:
+		c.registerLine(stmt.Assignment.Pos)
 		c.compileExpr(stmt.Assignment.Expr)
 		varIdx := c.getVarIdx(stmt.Assignment.Variable)
 		c.emit(InstrStore, byte(varIdx))
 	case stmt.IfStmt != nil:
+		c.registerLine(stmt.IfStmt.Pos)
 		endLabel := c.createLabel()
 		elseLabel := c.createLabel()
 
@@ -284,6 +294,7 @@ func (c *Compiler) compileStatement(stmt *Statement) {
 			byte(endAddr & 0xff),
 		}, c.code[endJumpPos+2:]...)...)
 	case stmt.WhileStmt != nil:
+		c.registerLine(stmt.WhileStmt.Pos)
 		startLabel := c.createLabel()
 		endLabel := c.createLabel()
 
@@ -317,6 +328,7 @@ func (c *Compiler) compileStatement(stmt *Statement) {
 		c.code[jumpToEndPos+1] = byte(endAddr & 0xff)
 
 	case stmt.Call != nil:
+		c.registerLine(stmt.Call.Pos)
 		c.compileCall(stmt.Call)
 	}
 }
@@ -406,4 +418,16 @@ func (c *Compiler) internString(s string) int {
 	c.strings[s] = c.nextString
 	c.nextString++
 	return c.nextString - 1
+}
+
+func (c *Compiler) registerLine(pos lexer.Position) {
+	if pos.Line != c.currentLine {
+		c.currentLine = pos.Line
+		c.sourceMap[c.currentPos] = c.currentLine
+	}
+}
+
+// Add a method to get the source map
+func (c *Compiler) GetSourceMap() map[int]int {
+	return c.sourceMap
 }

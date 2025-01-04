@@ -46,6 +46,11 @@ func main() {
 	// Create VM and register built-in functions
 	vm := NewVM(bytecode, 1024, 1024)
 
+	// Register source map from compiler
+	for pc, line := range compiler.GetSourceMap() {
+		vm.RegisterSourceMap(pc, line)
+	}
+
 	// Register the strings from the compiler
 	vm.RegisterStrings(compiler.strings)
 

@@ -22,6 +22,7 @@ type VMState struct {
 	CallStack   []int
 	ReturnStack []int
 	Strings     []string
+	SourceLine  int
 }
 
 func (vm *VMState) Clone() *VMState {
@@ -33,6 +34,7 @@ func (vm *VMState) Clone() *VMState {
 		CallStack:   make([]int, len(vm.CallStack)),
 		ReturnStack: make([]int, len(vm.ReturnStack)),
 		Strings:     make([]string, len(vm.Strings)),
+		SourceLine:  vm.SourceLine,
 	}
 	copy(newState.Stack, vm.Stack)
 	copy(newState.Locals, vm.Locals)
@@ -116,6 +118,7 @@ type VM struct {
 	breakpoints map[int]bool
 	running     bool
 	functions   map[int]GoFunction
+	sourceMap   map[int]int
 }
 
 func NewVM(bytecode []byte, stackSize, localsSize int) *VM {
@@ -133,6 +136,7 @@ func NewVM(bytecode []byte, stackSize, localsSize int) *VM {
 		history:     make([]*VMState, 0),
 		running:     false,
 		functions:   make(map[int]GoFunction),
+		sourceMap:   make(map[int]int),
 	}
 }
 
@@ -200,7 +204,6 @@ func (vm *VM) State() *VMState {
 
 func (vm *VM) execute() {
 	for vm.running && vm.currentState.PC < len(vm.bytecode) {
-		// Wait for debug command
 		cmd := <-vm.debugChan
 
 		switch cmd {
@@ -210,11 +213,10 @@ func (vm *VM) execute() {
 			return
 
 		case DebuggerCmdStepNext:
-			err := vm.executeInstruction()
+			err := vm.stepToNextLine()
 			if err != nil {
 				fmt.Println("Execution error:", err)
 				vm.running = false
-
 				vm.stateChan <- vm.currentState.Clone()
 				return
 			}
@@ -222,10 +224,7 @@ func (vm *VM) execute() {
 			vm.stateChan <- vm.currentState.Clone()
 
 		case DebuggerCmdStepBack:
-			if len(vm.history) > 0 {
-				vm.currentState = vm.history[len(vm.history)-1]
-				vm.history = vm.history[:len(vm.history)-1]
-			}
+			vm.stepToPreviousLine()
 			vm.stateChan <- vm.currentState.Clone()
 
 		case DebuggerCmdContinue:
@@ -745,5 +744,45 @@ func (vm *VM) RegisterStrings(strings map[string]int) {
 	// Register all strings at their correct indices
 	for str, idx := range strings {
 		vm.currentState.Strings[idx] = str
+	}
+}
+
+func (vm *VM) RegisterSourceMap(pc, line int) {
+	vm.sourceMap[pc] = line
+}
+
+func (vm *VM) stepToNextLine() error {
+	currentLine := vm.sourceMap[vm.currentState.PC]
+
+	for vm.currentState.PC < len(vm.bytecode) {
+		err := vm.executeInstruction()
+		if err != nil {
+			return err
+		}
+
+		// If we've reached an instruction from a different line, stop
+		if newLine := vm.sourceMap[vm.currentState.PC]; newLine != currentLine && newLine != 0 {
+			vm.currentState.SourceLine = newLine
+			return nil
+		}
+	}
+	return nil
+}
+
+func (vm *VM) stepToPreviousLine() {
+	if len(vm.history) == 0 {
+		return
+	}
+
+	currentLine := vm.sourceMap[vm.currentState.PC]
+
+	for len(vm.history) > 0 {
+		vm.currentState = vm.history[len(vm.history)-1]
+		vm.history = vm.history[:len(vm.history)-1]
+
+		if newLine := vm.sourceMap[vm.currentState.PC]; newLine != currentLine && newLine != 0 {
+			vm.currentState.SourceLine = newLine
+			break
+		}
 	}
 }
