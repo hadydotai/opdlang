@@ -147,7 +147,11 @@ func (vm *VM) SetBreakpoint(pc int, enabled bool) {
 
 func (vm *VM) Run() {
 	vm.running = true
-	go vm.execute()
+	// Start with sending initial state
+	go func() {
+		vm.stateChan <- vm.currentState.Clone()
+		vm.execute()
+	}()
 }
 
 func (vm *VM) RunBlock() {
@@ -162,6 +166,12 @@ func (vm *VM) RunUntil(pc int) {
 }
 
 func (vm *VM) Debug(cmd DebuggerCmd) *VMState {
+	// Don't start a new execution if already running
+	if !vm.running {
+		vm.Run()
+	}
+
+	// Send command and wait for response
 	vm.debugChan <- cmd
 	return <-vm.stateChan
 }
@@ -190,42 +200,56 @@ func (vm *VM) State() *VMState {
 
 func (vm *VM) execute() {
 	for vm.running && vm.currentState.PC < len(vm.bytecode) {
-		vm.mu.RLock()
-		hasBreakpoint := vm.breakpoints[vm.currentState.PC]
-		vm.mu.RUnlock()
+		// Wait for debug command
+		cmd := <-vm.debugChan
 
-		if hasBreakpoint {
-			vm.stateChan <- vm.currentState.Clone()
-			cmd := <-vm.debugChan
-
-			switch cmd {
-			case DebuggerCmdPause:
-				vm.running = false
-				vm.history = append(vm.history, vm.currentState.Clone())
-				return
-			case DebuggerCmdStepNext:
-				vm.currentState.PC++
-				vm.history = append(vm.history, vm.currentState.Clone())
-			case DebuggerCmdStepBack:
-				if len(vm.history) > 0 {
-					vm.currentState = vm.history[len(vm.history)-1]
-					vm.history = vm.history[:len(vm.history)-1]
-				}
-				continue
-			case DebuggerCmdContinue:
-				vm.running = true
-				// vm.currentState.PC++
-			}
-		}
-
-		vm.history = append(vm.history, vm.currentState.Clone())
-		err := vm.executeInstruction()
-		if err != nil {
-			fmt.Println("Execution error:", err)
+		switch cmd {
+		case DebuggerCmdPause:
 			vm.running = false
+			vm.stateChan <- vm.currentState.Clone()
 			return
+
+		case DebuggerCmdStepNext:
+			err := vm.executeInstruction()
+			if err != nil {
+				fmt.Println("Execution error:", err)
+				vm.running = false
+
+				vm.stateChan <- vm.currentState.Clone()
+				return
+			}
+			vm.history = append(vm.history, vm.currentState.Clone())
+			vm.stateChan <- vm.currentState.Clone()
+
+		case DebuggerCmdStepBack:
+			if len(vm.history) > 0 {
+				vm.currentState = vm.history[len(vm.history)-1]
+				vm.history = vm.history[:len(vm.history)-1]
+			}
+			vm.stateChan <- vm.currentState.Clone()
+
+		case DebuggerCmdContinue:
+			for vm.running && vm.currentState.PC < len(vm.bytecode) {
+				if vm.breakpoints[vm.currentState.PC] {
+					break
+				}
+				err := vm.executeInstruction()
+				if err != nil {
+					fmt.Println("Execution error:", err)
+					vm.running = false
+
+					vm.stateChan <- vm.currentState.Clone()
+					return
+				}
+				vm.history = append(vm.history, vm.currentState.Clone())
+			}
+			vm.stateChan <- vm.currentState.Clone()
 		}
 	}
+
+	// Program finished
+	vm.running = false
+	vm.stateChan <- vm.currentState.Clone()
 }
 
 func (vm *VM) executeInstruction() error {

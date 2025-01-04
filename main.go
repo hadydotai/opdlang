@@ -66,6 +66,10 @@ func main() {
 		return IntValue(0)
 	})
 
-	// Run the program
-	vm.RunBlock()
+	// Set initial breakpoint at PC=0
+	vm.SetBreakpoint(0, true)
+
+	// Start the REPL
+	repl := NewREPL(vm, compiler)
+	repl.Start()
 }
