@@ -99,159 +99,94 @@ func NewCompiler() *Compiler {
 }
 
 func (c *Compiler) DebugPrint() {
-	fmt.Println("Bytecode:")
+	fmt.Println("\033[1;36mBytecode:\033[0m")
 	i := 0
 	for i < len(c.code) {
 		instr := Instr(c.code[i])
+		fmt.Printf("\033[90m%04d:\033[0m \033[1;33m%-12v\033[0m", i, instr)
 
-		// Check if this is actually part of a jump instruction
-		isJumpOperand := false
-		if i > 0 {
-			prevInstr := Instr(c.code[i-1])
-			if prevInstr == InstrJmp || prevInstr == InstrJmpIfZero {
-				isJumpOperand = true
+		switch instr {
+		case InstrPush:
+			if i+1 < len(c.code) {
+				fmt.Printf("    \033[1;32mvalue:\033[0m %-20d", c.code[i+1])
+				i++
+			}
+		case InstrPushStr:
+			if i+1 < len(c.code) {
+				strIdx := c.code[i+1]
+				var foundStr string
+				for str, idx := range c.strings {
+					if idx == int(strIdx) {
+						foundStr = str
+						break
+					}
+				}
+				fmt.Printf("    \033[1;32mstring:\033[0m %-20q    \033[90m(str_%d)\033[0m", foundStr, strIdx)
+				i++
+			}
+		case InstrCall:
+			if i+2 < len(c.code) {
+				funcIdx := int(c.code[i+1])
+				funcName := "?"
+				for name, idx := range builtinFunctions {
+					if idx == funcIdx {
+						funcName = name
+						break
+					}
+				}
+				fmt.Printf("    \033[1;32mfunc:\033[0m   %-20s    \033[90m(func_%d, args=%d)\033[0m",
+					funcName, funcIdx, c.code[i+2])
+				i += 2
+			}
+		case InstrLoad, InstrStore:
+			if i+1 < len(c.code) {
+				varIdx := c.code[i+1]
+				varName := "?"
+				for name, idx := range c.vars {
+					if idx == int(varIdx) {
+						varName = name
+						break
+					}
+				}
+				fmt.Printf("    \033[1;32mvar:\033[0m    %-20s    \033[90m(var_%d)\033[0m", varName, varIdx)
+				i++
+			}
+		case InstrJmp, InstrJmpIfZero:
+			if i+2 < len(c.code) {
+				jumpAddr := (int(c.code[i+1]) << 8) | int(c.code[i+2])
+				fmt.Printf("    \033[1;32mjump:\033[0m   %-20d", jumpAddr)
+				i += 2
 			}
 		}
-
-		if !isJumpOperand {
-			fmt.Printf("%04d: %-12v", i, instr)
-
-			// Instructions that have operands
-			switch instr {
-			case InstrPush:
-				if i+1 < len(c.code) {
-					fmt.Printf("\t\x1b[36mvalue: %d\x1b[0m", c.code[i+1])
-					i++
-				}
-			case InstrPop:
-				if i+1 < len(c.code) {
-					// Find variable name by index
-					varName := "?"
-					for name, idx := range c.vars {
-						if idx == int(c.code[i+1]) {
-							varName = name
-							break
-						}
-					}
-					if varName == "?" {
-						fmt.Printf("\t\x1b[31m→ %s\x1b[0m (var_%d)", varName, c.code[i+1])
-					} else {
-						fmt.Printf("\t\x1b[36m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
-					}
-					i++
-				}
-			case InstrLoad:
-				if i+1 < len(c.code) {
-					// Find variable name by index
-					varName := "?"
-					for name, idx := range c.vars {
-						if idx == int(c.code[i+1]) {
-							varName = name
-							break
-						}
-					}
-					if varName == "?" {
-						fmt.Printf("\t\x1b[31mload %s (var_%d)\x1b[0m", varName, c.code[i+1])
-					} else {
-						fmt.Printf("\t\x1b[36mload %s (var_%d)\x1b[0m", varName, c.code[i+1])
-					}
-					i++
-				}
-			case InstrStore:
-				if i+1 < len(c.code) {
-					// Find variable name by index
-					varName := "?"
-					for name, idx := range c.vars {
-						if idx == int(c.code[i+1]) {
-							varName = name
-							break
-						}
-					}
-					if varName == "?" {
-						fmt.Printf("\t\x1b[31m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
-					} else {
-						fmt.Printf("\t\x1b[36m→ %s (var_%d)\x1b[0m", varName, c.code[i+1])
-					}
-					i++
-				}
-			case InstrCall:
-				if i+2 < len(c.code) {
-					// Find function name by index
-					funcName := "?"
-					funcIdx := int(c.code[i+1])
-					for name, idx := range builtinFunctions {
-						if idx == funcIdx {
-							funcName = name
-							break
-						}
-					}
-					if funcName == "?" {
-						fmt.Printf("\t\x1b[31m%s (func_%d) with %d args\x1b[0m",
-							funcName, c.code[i+1], c.code[i+2])
-					} else {
-						fmt.Printf("\t\x1b[36m%s (func_%d) with %d args\x1b[0m",
-							funcName, c.code[i+1], c.code[i+2])
-					}
-					i += 2
-				}
-			case InstrJmp, InstrJmpIfZero:
-				if i+2 < len(c.code) {
-					jumpAddr := (int(c.code[i+1]) << 8) | int(c.code[i+2])
-					// Find label by address
-					labelName := "?"
-					for name, addr := range c.labels {
-						if addr == jumpAddr {
-							labelName = name
-							break
-						}
-					}
-					if labelName == "?" {
-						switch instr {
-						case InstrJmp:
-							fmt.Printf("\t\x1b[31m→ %s (addr: %d)\x1b[0m", labelName, jumpAddr)
-						case InstrJmpIfZero:
-							fmt.Printf("\t\x1b[31m→ %s (addr: %d) if zero\x1b[0m", labelName, jumpAddr)
-						}
-					} else {
-						switch instr {
-						case InstrJmp:
-							fmt.Printf("\t\x1b[36m→ %s (addr: %d)\x1b[0m", labelName, jumpAddr)
-						case InstrJmpIfZero:
-							fmt.Printf("\t\x1b[36m→ %s (addr: %d) if zero\x1b[0m", labelName, jumpAddr)
-						}
-					}
-					i += 2
-				}
-			default:
-				fmt.Printf("\t\x1b[36m%v\x1b[0m", instr)
-			}
-			fmt.Println()
-		}
+		fmt.Println()
 		i++
 	}
 
-	// Print symbol tables
-	fmt.Println("\nVariables:")
+	fmt.Println("\n\033[1;36mSymbol Tables:\033[0m")
+
+	fmt.Println("\n\033[1;35mVariables:\033[0m")
 	for name, idx := range c.vars {
-		fmt.Printf("  %s -> var_%d\n", name, idx)
+		fmt.Printf("    %-30s \033[90m-> var_%d\033[0m\n", name, idx)
 	}
 
-	fmt.Println("\nLabels:")
-	for name, addr := range c.labels {
-		fmt.Printf("  %s -> addr %d\n", name, addr)
-	}
-
-	fmt.Println("\nFunctions:")
-	for name, idx := range builtinFunctions {
-		fmt.Printf("  %s -> func_%d (builtin)\n", name, idx)
-	}
+	fmt.Println("\n\033[1;35mFunctions:\033[0m")
 	for name, idx := range c.funcs {
-		fmt.Printf("  %s -> func_%d\n", name, idx)
+		fmt.Printf("    %-30s \033[90m-> func_%d\033[0m\n", name, idx)
 	}
 
-	fmt.Println("\nStrings:")
+	fmt.Println("\n\033[1;35mBuiltin Functions:\033[0m")
+	for name, idx := range builtinFunctions {
+		fmt.Printf("    %-30s \033[90m-> func_%d\033[0m\n", name, idx)
+	}
+
+	fmt.Println("\n\033[1;35mLabels:\033[0m")
+	for name, addr := range c.labels {
+		fmt.Printf("    %-30s \033[90m-> addr_%d\033[0m\n", name, addr)
+	}
+
+	fmt.Println("\n\033[1;35mStrings:\033[0m")
 	for str, idx := range c.strings {
-		fmt.Printf("  %q -> str_%d\n", str, idx)
+		fmt.Printf("    %-30q \033[90m-> str_%d\033[0m\n", str, idx)
 	}
 }
 
@@ -416,8 +351,6 @@ func (c *Compiler) compileExpr(expr *Expr) {
 		case ">=":
 			c.emit(InstrGte)
 		}
-		// Remove the POP instruction generation - the result should stay on the stack
-		// until it's explicitly stored or used by another operation
 	}
 }
 
@@ -427,6 +360,7 @@ func (c *Compiler) compileTerm(term *Term) {
 		c.emit(InstrPush, byte(*term.Number))
 	case term.String != nil:
 		stringIdx := c.internString(*term.String)
+		fmt.Printf("Compiling string: %q -> str_%d\n", *term.String, stringIdx)
 		c.emit(InstrPushStr, byte(stringIdx))
 	case term.Variable != nil:
 		varIdx := c.getVarIdx(*term.Variable)
@@ -441,8 +375,18 @@ func (c *Compiler) compileTerm(term *Term) {
 func (c *Compiler) compileCall(call *Call) {
 	fmt.Printf("Compiling call to %s with %d arguments\n", call.Function, len(call.Args))
 
-	// First compile the arguments in the correct order
-	// (we don't need to reverse them anymore since the VM handles the stack correctly)
+	// Compile arguments in reverse order
+	// for i := len(call.Args) - 1; i >= 0; i-- {
+	// 	arg := call.Args[i]
+	// 	if arg.Left.String != nil {
+	// 		// Handle string literals directly
+	// 		stringIdx := c.internString(*arg.Left.String)
+	// 		c.emit(InstrPushStr, byte(stringIdx))
+	// 	} else {
+	// 		c.compileExpr(arg)
+	// 	}
+	// }
+
 	for _, arg := range call.Args {
 		c.compileExpr(arg)
 	}

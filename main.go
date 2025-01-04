@@ -23,12 +23,9 @@ end
 `
 const exampleSource2 = `
 val i = 0
-while i < 1 do
-	print(i, "i")
-	print("+++")
-	print(i + 1, "i + 1")
-	val i = i + 1
-end
+print(i + 1, "i + 1")
+print(i, "i")
+print("+++")
 `
 
 func main() {
