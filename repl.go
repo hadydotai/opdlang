@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/alecthomas/participle/v2"
 	"github.com/chzyer/readline"
 )
 
@@ -51,6 +53,7 @@ func (c completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
 		"locals",
 		"pc",
 		"restart", "r",
+		"load",
 		"quit", "q",
 		"help", "h",
 	}
@@ -81,6 +84,7 @@ Available Commands:
   locals           Show local variables
   pc               Show current program counter
   restart, r       Restart program execution
+  load <file>      Load and execute a source file
   help, h          Show this help message
   quit, q          Exit debugger
 
@@ -168,6 +172,19 @@ func (r *REPL) Start() {
 			r.restartVM()
 			fmt.Println("Program restarted")
 
+		case "load":
+			if len(args) < 2 {
+				fmt.Println("Usage: load <filename>")
+				continue
+			}
+			err := r.loadFile(args[1])
+			if err != nil {
+				fmt.Printf("\033[31mError loading file: %v\033[0m\n", err)
+				continue
+			}
+			fmt.Printf("\033[32mLoaded file: %s\033[0m\n", args[1])
+			r.printState(r.vm.State())
+
 		case "quit", "q":
 			fmt.Println("\033[32mGoodbye!\033[0m")
 			return
@@ -221,4 +238,41 @@ func (r *REPL) formatStack(stack []Value) string {
 		}
 	}
 	return "[" + strings.Join(values, ", ") + "]"
+}
+
+func (r *REPL) loadFile(filename string) error {
+	source, err := os.ReadFile(filename)
+	if err != nil {
+		return fmt.Errorf("error reading file: %v", err)
+	}
+
+	parser := participle.MustBuild[Program](participle.Lexer(basicLexer))
+	program, err := parser.ParseString(filename, string(source))
+	if err != nil {
+		return fmt.Errorf("parse error: %v", err)
+	}
+
+	r.compiler = NewCompiler()
+	bytecode, err := r.compiler.compileProgram(program)
+	if err != nil {
+		return fmt.Errorf("compilation error: %v", err)
+	}
+
+	// Create new VM with the compiled bytecode
+	r.vm = NewVM(bytecode, 1024, 1024, true)
+	RegisterBuiltins(r.vm)
+
+	// Register source map from compiler
+	for pc, line := range r.compiler.GetSourceMap() {
+		r.vm.RegisterSourceMap(pc, line)
+	}
+
+	// Register the strings from the compiler
+	r.vm.RegisterStrings(r.compiler.strings)
+
+	// Set initial breakpoint at first line
+	r.vm.SetLineBreakpoint(1, true)
+	r.sourceCode = string(source)
+
+	return nil
 }
