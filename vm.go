@@ -114,43 +114,65 @@ type VM struct {
 	debugChan chan DebuggerCmd
 	stateChan chan *VMState
 
-	mu          sync.RWMutex
-	breakpoints map[int]bool
-	running     bool
-	functions   map[int]GoFunction
-	sourceMap   map[int]int
+	mu              sync.RWMutex
+	running         bool
+	functions       map[int]GoFunction
+	sourceMap       map[int]int
+	lineBreakpoints map[int]bool
+}
+
+func NewVmState(bytecode []byte, stackSize, localsSize int) *VMState {
+	return &VMState{
+		Stack:      make([]Value, 0, stackSize),
+		Locals:     make([]Value, 0, localsSize),
+		Memory:     make([]byte, 0, 1024),
+		Strings:    make([]string, 0),
+		SourceLine: 1,
+	}
 }
 
 func NewVM(bytecode []byte, stackSize, localsSize int) *VM {
 	return &VM{
-		bytecode: bytecode,
-		currentState: &VMState{
-			Stack:   make([]Value, 0, stackSize),
-			Locals:  make([]Value, 0, localsSize),
-			Memory:  make([]byte, 0, 1024),
-			Strings: make([]string, 0),
-		},
-		debugChan:   make(chan DebuggerCmd),
-		stateChan:   make(chan *VMState),
-		breakpoints: make(map[int]bool),
-		history:     make([]*VMState, 0),
-		running:     false,
-		functions:   make(map[int]GoFunction),
-		sourceMap:   make(map[int]int),
+		bytecode:        bytecode,
+		currentState:    NewVmState(bytecode, stackSize, localsSize),
+		debugChan:       make(chan DebuggerCmd),
+		stateChan:       make(chan *VMState),
+		history:         make([]*VMState, 0),
+		running:         false,
+		functions:       make(map[int]GoFunction),
+		sourceMap:       make(map[int]int),
+		lineBreakpoints: make(map[int]bool),
 	}
 }
 
-func (vm *VM) SetBreakpoint(pc int, enabled bool) {
+// func (vm *VM) SetBreakpoint(pc int, enabled bool) {
+// 	vm.mu.Lock()
+// 	defer vm.mu.Unlock()
+// 	vm.breakpoints[pc] = enabled
+// 	if !enabled {
+// 		delete(vm.breakpoints, pc)
+// 	}
+// }
+
+func (vm *VM) SetLineBreakpoint(line int, enabled bool) {
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
-	vm.breakpoints[pc] = enabled
+	vm.lineBreakpoints[line] = enabled
 	if !enabled {
-		delete(vm.breakpoints, pc)
+		delete(vm.lineBreakpoints, line)
 	}
 }
 
 func (vm *VM) Run() {
+	vm.mu.Lock()
+	// Clear any pending states from previous runs
+	select {
+	case <-vm.stateChan:
+	default:
+	}
 	vm.running = true
+	vm.mu.Unlock()
+
 	// Start with sending initial state
 	go func() {
 		vm.stateChan <- vm.currentState.Clone()
@@ -220,23 +242,25 @@ func (vm *VM) execute() {
 				vm.stateChan <- vm.currentState.Clone()
 				return
 			}
-			vm.history = append(vm.history, vm.currentState.Clone())
 			vm.stateChan <- vm.currentState.Clone()
 
 		case DebuggerCmdStepBack:
-			vm.stepToPreviousLine()
-			vm.stateChan <- vm.currentState.Clone()
-
+			if len(vm.history) > 0 {
+				vm.stepToPreviousLine()
+				vm.stateChan <- vm.currentState.Clone()
+			} else {
+				vm.stateChan <- vm.currentState.Clone()
+			}
 		case DebuggerCmdContinue:
 			for vm.running && vm.currentState.PC < len(vm.bytecode) {
-				if vm.breakpoints[vm.currentState.PC] {
+				currentLine := vm.sourceMap[vm.currentState.PC]
+				if vm.lineBreakpoints[currentLine] {
 					break
 				}
 				err := vm.executeInstruction()
 				if err != nil {
 					fmt.Println("Execution error:", err)
 					vm.running = false
-
 					vm.stateChan <- vm.currentState.Clone()
 					return
 				}
@@ -247,7 +271,11 @@ func (vm *VM) execute() {
 	}
 
 	// Program finished
+	vm.mu.Lock()
 	vm.running = false
+	vm.mu.Unlock()
+
+	// Send final state
 	vm.stateChan <- vm.currentState.Clone()
 }
 
@@ -637,30 +665,6 @@ func (vm *VM) executeJmpIfZero() error {
 	return nil
 }
 
-func (vm *VM) executeJmpIfNeg() error {
-	if len(vm.currentState.Stack) == 0 {
-		return fmt.Errorf("stack underflow")
-	}
-	// Read two bytes for jump address
-	if vm.currentState.PC+1 >= len(vm.bytecode) {
-		return fmt.Errorf("invalid jump address")
-	}
-	highByte := int(vm.bytecode[vm.currentState.PC])
-	lowByte := int(vm.bytecode[vm.currentState.PC+1])
-	jumpAddr := (highByte << 8) | lowByte
-
-	condition := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	// Pop the condition value
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
-
-	if condition == IntValue(0) {
-		vm.currentState.PC = jumpAddr
-	} else {
-		vm.currentState.PC += 2 // Skip over jump address
-	}
-	return nil
-}
-
 func (vm *VM) executeCall() error {
 	funcIdx := int(vm.bytecode[vm.currentState.PC])
 	numArgs := int(vm.bytecode[vm.currentState.PC+1])
@@ -755,6 +759,9 @@ func (vm *VM) stepToNextLine() error {
 	currentLine := vm.sourceMap[vm.currentState.PC]
 
 	for vm.currentState.PC < len(vm.bytecode) {
+		// Store the current state BEFORE executing the instruction
+		vm.history = append(vm.history, vm.currentState.Clone())
+
 		err := vm.executeInstruction()
 		if err != nil {
 			return err
@@ -775,14 +782,28 @@ func (vm *VM) stepToPreviousLine() {
 	}
 
 	currentLine := vm.sourceMap[vm.currentState.PC]
+	var previousState *VMState
 
 	for len(vm.history) > 0 {
-		vm.currentState = vm.history[len(vm.history)-1]
+		previousState = vm.history[len(vm.history)-1].Clone()
 		vm.history = vm.history[:len(vm.history)-1]
 
-		if newLine := vm.sourceMap[vm.currentState.PC]; newLine != currentLine && newLine != 0 {
+		if newLine := vm.sourceMap[previousState.PC]; newLine != currentLine && newLine != 0 {
+			vm.currentState = previousState
 			vm.currentState.SourceLine = newLine
 			break
 		}
+	}
+}
+
+// Add a new method to properly stop the VM
+func (vm *VM) Stop() {
+	vm.mu.Lock()
+	vm.running = false
+	vm.mu.Unlock()
+	// Drain any pending state from the channel
+	select {
+	case <-vm.stateChan:
+	default:
 	}
 }

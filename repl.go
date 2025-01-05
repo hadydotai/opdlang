@@ -9,9 +9,10 @@ import (
 )
 
 type REPL struct {
-	vm       *VM
-	compiler *Compiler
-	reader   *bufio.Reader
+	vm         *VM
+	compiler   *Compiler
+	reader     *bufio.Reader
+	sourceCode string
 }
 
 func NewREPL(vm *VM, compiler *Compiler) *REPL {
@@ -25,19 +26,19 @@ func NewREPL(vm *VM, compiler *Compiler) *REPL {
 func (r *REPL) Start() {
 	fmt.Println("VM Debugger REPL")
 	fmt.Println("Available commands:")
-	fmt.Println("  step - Execute next instruction")
-	fmt.Println("  back - Step back to previous state")
-	fmt.Println("  continue - Continue execution")
-	fmt.Println("  break <pc> - Set breakpoint at PC")
+	fmt.Println("  step, s, n - Execute next instruction")
+	fmt.Println("  back, b - Step back to previous state")
+	fmt.Println("  continue, c - Continue execution")
+	fmt.Println("  break <line> - Set breakpoint at line number")
 	fmt.Println("  stack - Show current stack")
 	fmt.Println("  locals - Show local variables")
 	fmt.Println("  pc - Show current program counter")
-	fmt.Println("  quit - Exit debugger")
+	fmt.Println("  restart, r - Restart program execution")
+	fmt.Println("  quit, q - Exit debugger")
 
 	// Start VM execution and get initial state
 	r.vm.Run()
-	initialState := <-r.vm.stateChan
-	r.printState(initialState)
+	<-r.vm.stateChan
 
 	for {
 		fmt.Print("> ")
@@ -50,33 +51,41 @@ func (r *REPL) Start() {
 		}
 
 		switch args[0] {
-		case "step", "s":
+		case "step", "s", "n":
 			if r.vm.currentState.PC >= len(r.vm.bytecode) {
 				fmt.Println("Program has finished execution")
+				r.vm.Stop()
+				newState := NewVmState(r.vm.bytecode, cap(r.vm.currentState.Stack), cap(r.vm.currentState.Locals))
+				newState.Strings = make([]string, len(r.vm.currentState.Strings))
+				copy(newState.Strings, r.vm.currentState.Strings)
+				r.vm.currentState = newState
+				r.vm.history = make([]*VMState, 0)
+				r.vm.Run()
+				<-r.vm.stateChan
 				continue
 			}
-			state := r.vm.StepNext()
-			r.printState(state)
+			r.vm.StepNext()
+			// r.printState(state)
 
 		case "back", "b":
-			state := r.vm.StepBack()
-			r.printState(state)
+			r.vm.StepBack()
+			// r.printState(state)
 
 		case "continue", "c":
 			r.vm.Continue()
 
 		case "break":
 			if len(args) < 2 {
-				fmt.Println("Usage: break <pc>")
+				fmt.Println("Usage: break <line>")
 				continue
 			}
-			pc, err := strconv.Atoi(args[1])
+			line, err := strconv.Atoi(args[1])
 			if err != nil {
-				fmt.Printf("Invalid PC value: %s\n", args[1])
+				fmt.Printf("Invalid line number: %s\n", args[1])
 				continue
 			}
-			r.vm.SetBreakpoint(pc, true)
-			fmt.Printf("Breakpoint set at PC=%d\n", pc)
+			r.vm.SetLineBreakpoint(line, true)
+			fmt.Printf("Breakpoint set at line %d\n", line)
 
 		case "stack":
 			state := r.vm.State()
@@ -89,6 +98,17 @@ func (r *REPL) Start() {
 		case "pc":
 			state := r.vm.State()
 			fmt.Printf("PC: %d (Instruction: %s)\n", state.PC, Instr(r.vm.bytecode[state.PC]))
+
+		case "restart", "r":
+			r.vm.Stop()
+			newState := NewVmState(r.vm.bytecode, cap(r.vm.currentState.Stack), cap(r.vm.currentState.Locals))
+			newState.Strings = make([]string, len(r.vm.currentState.Strings))
+			copy(newState.Strings, r.vm.currentState.Strings)
+			r.vm.currentState = newState
+			r.vm.history = make([]*VMState, 0)
+			r.vm.Run()
+			<-r.vm.stateChan
+			fmt.Println("Program restarted")
 
 		case "quit", "q":
 			return

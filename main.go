@@ -3,45 +3,30 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/alecthomas/participle/v2"
 )
 
-const exampleSource = `
-val i = 0
-while i < 10 do
-	print(i, " outter!")
-	print("----")
-	val j  = 0
-	while j < 10 do
-		print(j + i, " inner!")
-		val j = j + 1
-	end
-	print("----")
-	val i = i + 1
-end
-`
-const exampleSource2 = `
-val i = 0
+const exampleSource2 = `val i = 0
 print(i + 1, "i + 1")
-print(i, "i")
-print("+++")
 `
 
 func main() {
 	// Parse and compile the source
+	sourceCode := strings.TrimSpace(exampleSource2) // Store the source code
 	parser := participle.MustBuild[Program](
 		participle.Lexer(basicLexer),
 	)
 
-	program, err := parser.ParseString("", exampleSource2)
+	program, err := parser.ParseString("", sourceCode)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	compiler := NewCompiler()
 	bytecode := compiler.compileProgram(program)
-	compiler.DebugPrint()
+	// compiler.DebugPrint()
 
 	// Create VM and register built-in functions
 	vm := NewVM(bytecode, 1024, 1024)
@@ -58,7 +43,7 @@ func main() {
 	vm.RegisterFunction(0, func(args []Value) Value {
 		for i, arg := range args {
 			if i > 0 {
-				fmt.Print(" ") // Add space between arguments
+				fmt.Print(" ")
 			}
 			switch v := arg.(type) {
 			case IntValue:
@@ -72,9 +57,10 @@ func main() {
 	})
 
 	// Set initial breakpoint at PC=0
-	vm.SetBreakpoint(0, true)
+	vm.SetLineBreakpoint(1, true)
 
-	// Start the REPL
+	// Create REPL and start it, passing the source code
 	repl := NewREPL(vm, compiler)
+	repl.sourceCode = sourceCode // Add this field to REPL struct
 	repl.Start()
 }

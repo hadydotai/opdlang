@@ -47,7 +47,6 @@ type Expr struct {
 }
 
 type Term struct {
-	Pos      lexer.Position
 	Number   *int    `  @Int`
 	String   *string `| @String`
 	Call     *Call   `| @@`
@@ -372,7 +371,6 @@ func (c *Compiler) compileTerm(term *Term) {
 		c.emit(InstrPush, byte(*term.Number))
 	case term.String != nil:
 		stringIdx := c.internString(*term.String)
-		fmt.Printf("Compiling string: %q -> str_%d\n", *term.String, stringIdx)
 		c.emit(InstrPushStr, byte(stringIdx))
 	case term.Variable != nil:
 		varIdx := c.getVarIdx(*term.Variable)
@@ -385,20 +383,6 @@ func (c *Compiler) compileTerm(term *Term) {
 }
 
 func (c *Compiler) compileCall(call *Call) {
-	fmt.Printf("Compiling call to %s with %d arguments\n", call.Function, len(call.Args))
-
-	// Compile arguments in reverse order
-	// for i := len(call.Args) - 1; i >= 0; i-- {
-	// 	arg := call.Args[i]
-	// 	if arg.Left.String != nil {
-	// 		// Handle string literals directly
-	// 		stringIdx := c.internString(*arg.Left.String)
-	// 		c.emit(InstrPushStr, byte(stringIdx))
-	// 	} else {
-	// 		c.compileExpr(arg)
-	// 	}
-	// }
-
 	for _, arg := range call.Args {
 		c.compileExpr(arg)
 	}
@@ -427,7 +411,25 @@ func (c *Compiler) registerLine(pos lexer.Position) {
 	}
 }
 
+func (c *Compiler) GetPCForLine(line int) int {
+	for pc, l := range c.sourceMap {
+		if l == line {
+			return pc
+		}
+	}
+	return -1
+}
+
 // Add a method to get the source map
 func (c *Compiler) GetSourceMap() map[int]int {
 	return c.sourceMap
+}
+
+func (c *Compiler) GetLineForPC(pc int) int {
+	for pc, line := range c.sourceMap {
+		if pc == pc {
+			return line
+		}
+	}
+	return -1
 }
