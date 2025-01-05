@@ -144,15 +144,25 @@ func (t *Term) toExpr() *Expr {
 func (t *Term) Parse(lex *lexer.PeekingLexer) error {
 	token := lex.Peek()
 	if token == nil {
-		return fmt.Errorf("unexpected end of input")
+		return NewSyntaxError(
+			lexer.Position{Line: 1, Column: 1}, // Use actual position if available
+			"",                                 // Source will be filled in by the compiler
+			"unexpected end of input",
+			"expected a number, string, variable name, or expression",
+		)
 	}
 
 	switch token.Type {
 	case lexer.TokenType(basicLexer.Symbols()["Int"]):
-		lex.Next() // Consume the token
+		lex.Next()
 		num, err := strconv.Atoi(token.Value)
 		if err != nil {
-			return err
+			return NewSyntaxError(
+				token.Pos,
+				"", // Source will be filled in
+				fmt.Sprintf("invalid integer literal: %s", token.Value),
+				"make sure the number is a valid integer",
+			)
 		}
 		t.Number = &num
 
@@ -212,11 +222,21 @@ func (t *Term) Parse(lex *lexer.PeekingLexer) error {
 			lex.Next() // Consume ')'
 			t.SubExpr = expr
 		} else {
-			return fmt.Errorf("unexpected token: %s", token.Value)
+			return NewSyntaxError(
+				token.Pos,
+				"",
+				fmt.Sprintf("unexpected token: %s", token.Value),
+				fmt.Sprintf("expected one of: number, string, variable name, or '('"),
+			)
 		}
 
 	default:
-		return fmt.Errorf("unexpected token type: %v", token.Type)
+		return NewSyntaxError(
+			token.Pos,
+			"",
+			fmt.Sprintf("unexpected token: %s", token.Value),
+			fmt.Sprintf("expected one of: number, string, variable name, or '('"),
+		)
 	}
 
 	return nil

@@ -117,24 +117,81 @@ func runSourceFile(filename string, debug bool) int {
 		return exitError
 	}
 
-	if debug {
-		return startREPL(string(source))
-	}
-
 	parser := participle.MustBuild[Program](
 		participle.Lexer(basicLexer),
 	)
 
 	program, err := parser.ParseString(filename, string(source))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
+		if perr, ok := err.(participle.Error); ok {
+			pos := perr.Position()
+			lines := strings.Split(string(source), "\n")
+			line := lines[pos.Line-1]
+
+			// Analyze the error context
+			msg := perr.Message()
+			var errorMsg, helpMsg string
+
+			// Check if we're in a function call context
+			if strings.Contains(line, "print(") {
+				// Extract the function call arguments
+				args := line[strings.Index(line, "(")+1 : len(line)-1]
+
+				if strings.Contains(msg, "expected") {
+					if strings.Contains(msg, ",") {
+						errorMsg = "missing comma between function arguments"
+					} else {
+						errorMsg = "invalid function call syntax"
+					}
+					// Create a corrected version of the arguments
+					fixedArgs := strings.Replace(args, " ", ", ", -1)
+					helpMsg = fmt.Sprintf("function arguments should be comma-separated: print(%s)", fixedArgs)
+				} else {
+					errorMsg = "invalid function call"
+					helpMsg = "function calls should be in the format: print(arg1, arg2, ...)"
+				}
+			} else if strings.HasPrefix(line, "val") {
+				errorMsg = "invalid variable declaration"
+				helpMsg = "variable declarations should follow the format: val name = value"
+			} else if !strings.HasPrefix(line, "val") && strings.Contains(line, "=") {
+				errorMsg = "missing 'val' keyword in variable declaration"
+				helpMsg = "use 'val' to declare variables: val name = \"value\""
+			} else {
+				// Default to the original parser error if we can't determine the context
+				errorMsg = msg
+				if errorMsg == "" {
+					errorMsg = "syntax error"
+				}
+				helpMsg = "check the syntax at this location"
+			}
+
+			compErr := &CompilerError{
+				Kind:    ErrorSyntax,
+				Message: errorMsg,
+				Pos:     pos,
+				Source:  string(source),
+				Help:    helpMsg,
+				Snippet: line[pos.Column-1:],
+			}
+			fmt.Fprintln(os.Stderr, compErr.Error())
+		} else {
+			fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
+		}
 		return exitError
 	}
 
 	compiler := NewCompiler()
 	bytecode, err := compiler.compileProgram(program)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
+		if compErr, ok := err.(*CompilerError); ok {
+			// If it's already our error type, just ensure it has the source
+			if compErr.Source == "" {
+				compErr.Source = string(source)
+			}
+			fmt.Fprintln(os.Stderr, compErr.Error())
+		} else {
+			fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
+		}
 		return exitError
 	}
 
