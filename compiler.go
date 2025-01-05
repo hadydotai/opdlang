@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/alecthomas/participle/v2/lexer"
 )
@@ -77,11 +78,148 @@ func init() {
 	}
 }
 
-// Update the Expr type to better support Pratt parsing
+// First, update the Expr type to be simpler since we'll handle the parsing ourselves
 type Expr struct {
-	Left  *Term   `@@`
-	Op    *string `[ @("+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=") `
-	Right *Expr   `@@ ]`
+	Left  *Term
+	Op    *string
+	Right *Expr
+}
+
+// Add the Parse method to implement the Parseable interface
+func (e *Expr) Parse(lex *lexer.PeekingLexer) error {
+	// Parse the initial term
+	term := &Term{}
+	if err := term.Parse(lex); err != nil {
+		return err
+	}
+	e.Left = term
+
+	// Look for an operator
+	token := lex.Peek()
+	if token == nil {
+		return nil
+	}
+
+	// Check if the token is an operator
+	if op, isOp := operators[token.Value]; isOp {
+		// Consume the operator token
+		lex.Next()
+		e.Op = &token.Value
+
+		// Parse the right side with the appropriate precedence
+		right := &Expr{}
+		if err := right.Parse(lex); err != nil {
+			return err
+		}
+
+		// If the right side has an operator with higher precedence,
+		// restructure the tree
+		if right.Op != nil {
+			rightOp := operators[*right.Op]
+			if rightOp.precedence > op.precedence {
+				// Create a new expression for the higher precedence operation
+				newExpr := &Expr{
+					Left:  right.Left,
+					Op:    right.Op,
+					Right: right.Right,
+				}
+
+				// Make the current expression use the higher precedence result
+				e.Right = newExpr
+				return nil
+			}
+		}
+		e.Right = right
+	}
+
+	return nil
+}
+
+// Add a helper method to Term to convert it to an Expr
+func (t *Term) toExpr() *Expr {
+	return &Expr{Left: t}
+}
+
+// Update the Term type to also implement Parseable
+func (t *Term) Parse(lex *lexer.PeekingLexer) error {
+	token := lex.Peek()
+	if token == nil {
+		return fmt.Errorf("unexpected end of input")
+	}
+
+	switch token.Type {
+	case lexer.TokenType(basicLexer.Symbols()["Int"]):
+		lex.Next() // Consume the token
+		num, err := strconv.Atoi(token.Value)
+		if err != nil {
+			return err
+		}
+		t.Number = &num
+
+	case lexer.TokenType(basicLexer.Symbols()["String"]):
+		lex.Next() // Consume the token
+		t.String = &token.Value
+
+	case lexer.TokenType(basicLexer.Symbols()["Ident"]):
+		lex.Next() // Consume the token
+		// Look ahead to see if this is a function call
+		next := lex.Peek()
+		if next != nil && next.Value == "(" {
+			// Parse function call
+			call := &Call{Function: token.Value}
+			call.Pos = token.Pos
+			lex.Next() // Consume '('
+
+			// Parse arguments
+			for {
+				next = lex.Peek()
+				if next == nil {
+					return fmt.Errorf("unexpected end of input in function call")
+				}
+				if next.Value == ")" {
+					lex.Next() // Consume ')'
+					break
+				}
+				if len(call.Args) > 0 {
+					if next.Value != "," {
+						return fmt.Errorf("expected ',' between arguments")
+					}
+					lex.Next() // Consume ','
+				}
+				arg := &Expr{}
+				if err := arg.Parse(lex); err != nil {
+					return err
+				}
+				call.Args = append(call.Args, arg)
+			}
+			t.Call = call
+		} else {
+			// It's a variable
+			t.Variable = &token.Value
+		}
+
+	case lexer.TokenType(basicLexer.Symbols()["Punct"]):
+		if token.Value == "(" {
+			lex.Next() // Consume '('
+			expr := &Expr{}
+			if err := expr.Parse(lex); err != nil {
+				return err
+			}
+			next := lex.Peek()
+			if next == nil || next.Value != ")" {
+				return fmt.Errorf("expected closing parenthesis")
+			}
+			lex.Next() // Consume ')'
+			t.SubExpr = expr
+		} else {
+			return fmt.Errorf("unexpected token: %s", token.Value)
+		}
+
+	default:
+		return fmt.Errorf("unexpected token type: %v", token.Type)
+	}
+
+	return nil
 }
 
 // Add parsing functions
