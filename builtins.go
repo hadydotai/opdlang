@@ -4,17 +4,12 @@ import "fmt"
 
 // RegisterBuiltins registers all built-in functions with the VM
 func RegisterBuiltins(vm *VM) {
-	// Register the print function
-	vm.RegisterFunction(builtinFunctions["print"], printFunc(vm))
-}
+	// Print function
+	vm.RegisterFunction(builtinFunctions["print"], func(args []Value) Value {
+		vm.wg.Add(1)       // Add before print operation
+		defer vm.wg.Done() // Ensure Done is called after printing
 
-// printFunc creates a print function closure that has access to the VM
-func printFunc(vm *VM) GoFunction {
-	return func(args []Value) Value {
-		for i, arg := range args {
-			if i > 0 {
-				fmt.Print(" ")
-			}
+		for _, arg := range args {
 			switch v := arg.(type) {
 			case IntValue:
 				fmt.Print(int(v))
@@ -22,7 +17,6 @@ func printFunc(vm *VM) GoFunction {
 				fmt.Print(vm.currentState.Strings[v.Index])
 			}
 		}
-		fmt.Println()
 		return IntValue(0)
-	}
+	})
 }

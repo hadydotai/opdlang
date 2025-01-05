@@ -150,9 +150,8 @@ func runSourceFile(filename string, debug bool) int {
 	vm.RegisterStrings(compiler.strings)
 
 	vm.Run()
-	// Wait for both completion states
-	<-vm.stateChan // Initial state
-	<-vm.stateChan // Final state after all operations complete
+	// Wait for final state (after all operations complete)
+	<-vm.stateChan
 
 	return exitSuccess
 }

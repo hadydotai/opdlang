@@ -171,17 +171,16 @@ func (vm *VM) SetLineBreakpoint(line int, enabled bool) {
 
 func (vm *VM) Run() {
 	vm.mu.Lock()
-	select {
-	case <-vm.stateChan:
-	default:
-	}
 	vm.running = true
 	vm.mu.Unlock()
 
+	// Execute in a goroutine
 	go func() {
-		vm.stateChan <- vm.currentState.Clone()
+		// Execute the program
 		vm.execute()
+		// Wait for all print operations
 		vm.wg.Wait()
+		// Signal completion
 		vm.stateChan <- vm.currentState.Clone()
 	}()
 }
