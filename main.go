@@ -132,23 +132,27 @@ func runSourceFile(filename string, debug bool) int {
 	}
 
 	compiler := NewCompiler()
-	bytecode := compiler.compileProgram(program)
+	bytecode, err := compiler.compileProgram(program)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
+		return exitError
+	}
 
 	// compiler.DebugPrint() // This will show us the compiled bytecode
 
 	vm := NewVM(bytecode, 1024, 1024, debug)
 	RegisterBuiltins(vm)
 
-	// Register source map from compiler
+	// Register source map and strings
 	for pc, line := range compiler.GetSourceMap() {
 		vm.RegisterSourceMap(pc, line)
 	}
-
-	// Register the strings from the compiler
 	vm.RegisterStrings(compiler.strings)
 
 	vm.Run()
-	<-vm.stateChan
+	// Wait for both completion states
+	<-vm.stateChan // Initial state
+	<-vm.stateChan // Final state after all operations complete
 
 	return exitSuccess
 }
@@ -169,7 +173,11 @@ func startREPL(initialSource string) int {
 	compiler := NewCompiler()
 	var bytecode []byte
 	if program != nil {
-		bytecode = compiler.compileProgram(program)
+		bytecode, err = compiler.compileProgram(program)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
+			return exitError
+		}
 	}
 
 	vm := NewVM(bytecode, 1024, 1024, true)
@@ -204,7 +212,10 @@ func compileSource(source string, inputFile string) ([]byte, error) {
 	}
 
 	compiler := NewCompiler()
-	bytecode := compiler.compileProgram(program)
+	bytecode, err := compiler.compileProgram(program)
+	if err != nil {
+		return nil, fmt.Errorf("compilation error: %v", err)
+	}
 	return bytecode, nil
 }
 

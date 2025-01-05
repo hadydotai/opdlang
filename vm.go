@@ -119,6 +119,7 @@ type VM struct {
 	functions       map[int]GoFunction
 	sourceMap       map[int]int
 	lineBreakpoints map[int]bool
+	wg              sync.WaitGroup
 }
 
 func NewVmState(bytecode []byte, stackSize, localsSize int) *VMState {
@@ -170,7 +171,6 @@ func (vm *VM) SetLineBreakpoint(line int, enabled bool) {
 
 func (vm *VM) Run() {
 	vm.mu.Lock()
-	// Clear any pending states from previous runs
 	select {
 	case <-vm.stateChan:
 	default:
@@ -178,10 +178,11 @@ func (vm *VM) Run() {
 	vm.running = true
 	vm.mu.Unlock()
 
-	// Start with sending initial state
 	go func() {
 		vm.stateChan <- vm.currentState.Clone()
 		vm.execute()
+		vm.wg.Wait()
+		vm.stateChan <- vm.currentState.Clone()
 	}()
 }
 

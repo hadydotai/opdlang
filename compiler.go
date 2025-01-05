@@ -40,10 +40,157 @@ type Assignment struct {
 	Expr     *Expr  `@@`
 }
 
+// First, let's define precedence levels for our operators
+const (
+	PREC_NONE    = 0
+	PREC_COMPARE = 1 // == != < <= > >=
+	PREC_TERM    = 2 // + -
+	PREC_FACTOR  = 3 // * / %
+)
+
+// Define a type for our parser functions
+type prefixFn func(*Compiler) (*Expr, error)
+type infixFn func(*Compiler, *Expr) (*Expr, error)
+
+// Define operator info
+type operatorInfo struct {
+	precedence int
+	infix      infixFn
+}
+
+// Create operator precedence table
+var operators map[string]operatorInfo
+
+func init() {
+	operators = map[string]operatorInfo{
+		"+":  {PREC_TERM, parseInfixOp},
+		"-":  {PREC_TERM, parseInfixOp},
+		"*":  {PREC_FACTOR, parseInfixOp},
+		"/":  {PREC_FACTOR, parseInfixOp},
+		"%":  {PREC_FACTOR, parseInfixOp},
+		"==": {PREC_COMPARE, parseInfixOp},
+		"!=": {PREC_COMPARE, parseInfixOp},
+		"<":  {PREC_COMPARE, parseInfixOp},
+		"<=": {PREC_COMPARE, parseInfixOp},
+		">":  {PREC_COMPARE, parseInfixOp},
+		">=": {PREC_COMPARE, parseInfixOp},
+	}
+}
+
+// Update the Expr type to better support Pratt parsing
 type Expr struct {
-	Left  *Term  `@@`
-	Op    string `[ @("+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=") `
-	Right *Expr  `@@ ]`
+	Left  *Term   `@@`
+	Op    *string `[ @("+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=") `
+	Right *Expr   `@@ ]`
+}
+
+// Add parsing functions
+func parseInfixOp(c *Compiler, left *Expr) (*Expr, error) {
+	// Create a new expression with the left operand
+	expr := &Expr{
+		Left: left.Left,
+		Op:   left.Op,
+	}
+
+	// Get the operator's precedence
+	op := *left.Op
+	precedence := operators[op].precedence
+
+	// Parse the right side with precedence
+	right, err := parsePrecedence(c, precedence+1)
+	if err != nil {
+		return nil, err
+	}
+
+	expr.Right = right
+	return expr, nil
+}
+
+func parsePrecedence(c *Compiler, precedence int) (*Expr, error) {
+	// Parse the left-hand expression
+	left, err := parsePrimary(c)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		if left.Op == nil {
+			break
+		}
+
+		op := *left.Op
+		info, exists := operators[op]
+		if !exists || info.precedence < precedence {
+			break
+		}
+
+		// Parse the operator
+		expr, err := info.infix(c, left)
+		if err != nil {
+			return nil, err
+		}
+		left = expr
+	}
+
+	return left, nil
+}
+
+func parsePrimary(c *Compiler) (*Expr, error) {
+	// This will parse a basic term (number, string, variable, etc.)
+	return &Expr{
+		Left: &Term{
+			Number:   nil, // Fill these in based on the token
+			String:   nil,
+			Variable: nil,
+			SubExpr:  nil,
+		},
+	}, nil
+}
+
+// Update the compiler's expression compilation
+func (c *Compiler) compileExpr(expr *Expr) error {
+	// If there's no operator, just compile the term
+	if expr.Op == nil {
+		return c.compileTerm(expr.Left)
+	}
+
+	// Compile left operand
+	if err := c.compileTerm(expr.Left); err != nil {
+		return err
+	}
+
+	// Compile right operand
+	if err := c.compileExpr(expr.Right); err != nil {
+		return err
+	}
+
+	// Emit the operator instruction
+	switch *expr.Op {
+	case "+":
+		c.emit(InstrAdd)
+	case "-":
+		c.emit(InstrSub)
+	case "*":
+		c.emit(InstrMul)
+	case "/":
+		c.emit(InstrDiv)
+	case "%":
+		c.emit(InstrMod)
+	case "==":
+		c.emit(InstrEq)
+	case "!=":
+		c.emit(InstrNeq)
+	case "<":
+		c.emit(InstrLt)
+	case "<=":
+		c.emit(InstrLte)
+	case ">":
+		c.emit(InstrGt)
+	case ">=":
+		c.emit(InstrGte)
+	}
+
+	return nil
 }
 
 type Term struct {
@@ -235,20 +382,23 @@ func (c *Compiler) setLabel(label string) {
 	c.labels[label] = c.currentPos
 }
 
-func (c *Compiler) compileProgram(program *Program) []byte {
+func (c *Compiler) compileProgram(program *Program) ([]byte, error) {
 	for _, stmt := range program.Statements {
-		c.compileStatement(&stmt)
+		if err := c.compileStatement(&stmt); err != nil {
+			return nil, err
+		}
 	}
-	// Add HALT instruction at the end of the program
 	c.emit(InstrHalt)
-	return c.code
+	return c.code, nil
 }
 
-func (c *Compiler) compileStatement(stmt *Statement) {
+func (c *Compiler) compileStatement(stmt *Statement) error {
 	switch {
 	case stmt.Assignment != nil:
 		c.registerLine(stmt.Assignment.Pos)
-		c.compileExpr(stmt.Assignment.Expr)
+		if err := c.compileExpr(stmt.Assignment.Expr); err != nil {
+			return err
+		}
 		varIdx := c.getVarIdx(stmt.Assignment.Variable)
 		c.emit(InstrStore, byte(varIdx))
 	case stmt.IfStmt != nil:
@@ -263,7 +413,9 @@ func (c *Compiler) compileStatement(stmt *Statement) {
 		c.currentPos += 2
 
 		for _, s := range stmt.IfStmt.Then {
-			c.compileStatement(&s)
+			if err := c.compileStatement(&s); err != nil {
+				return err
+			}
 		}
 
 		c.emit(InstrJmp)
@@ -274,7 +426,9 @@ func (c *Compiler) compileStatement(stmt *Statement) {
 		c.setLabel(elseLabel)
 		if stmt.IfStmt.Else != nil {
 			for _, s := range stmt.IfStmt.Else {
-				c.compileStatement(&s)
+				if err := c.compileStatement(&s); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -309,7 +463,9 @@ func (c *Compiler) compileStatement(stmt *Statement) {
 
 		// Compile loop body
 		for _, s := range stmt.WhileStmt.Body {
-			c.compileStatement(&s)
+			if err := c.compileStatement(&s); err != nil {
+				return err
+			}
 		}
 
 		// Jump back to start of loop
@@ -328,44 +484,12 @@ func (c *Compiler) compileStatement(stmt *Statement) {
 
 	case stmt.Call != nil:
 		c.registerLine(stmt.Call.Pos)
-		c.compileCall(stmt.Call)
+		return c.compileCall(stmt.Call)
 	}
+	return nil
 }
 
-func (c *Compiler) compileExpr(expr *Expr) {
-	c.compileTerm(expr.Left)
-	if expr.Right != nil {
-		// Compile right operand first
-		c.compileExpr(expr.Right)
-		// Then emit the operator
-		switch expr.Op {
-		case "+":
-			c.emit(InstrAdd)
-		case "-":
-			c.emit(InstrSub)
-		case "*":
-			c.emit(InstrMul)
-		case "/":
-			c.emit(InstrDiv)
-		case "%":
-			c.emit(InstrMod)
-		case "==":
-			c.emit(InstrEq)
-		case "!=":
-			c.emit(InstrNeq)
-		case "<":
-			c.emit(InstrLt)
-		case "<=":
-			c.emit(InstrLte)
-		case ">":
-			c.emit(InstrGt)
-		case ">=":
-			c.emit(InstrGte)
-		}
-	}
-}
-
-func (c *Compiler) compileTerm(term *Term) {
+func (c *Compiler) compileTerm(term *Term) error {
 	switch {
 	case term.Number != nil:
 		c.emit(InstrPush, byte(*term.Number))
@@ -376,20 +500,24 @@ func (c *Compiler) compileTerm(term *Term) {
 		varIdx := c.getVarIdx(*term.Variable)
 		c.emit(InstrLoad, byte(varIdx))
 	case term.Call != nil:
-		c.compileCall(term.Call)
+		return c.compileCall(term.Call)
 	case term.SubExpr != nil:
-		c.compileExpr(term.SubExpr)
+		return c.compileExpr(term.SubExpr)
 	}
+	return nil
 }
 
-func (c *Compiler) compileCall(call *Call) {
+func (c *Compiler) compileCall(call *Call) error {
 	for _, arg := range call.Args {
-		c.compileExpr(arg)
+		if err := c.compileExpr(arg); err != nil {
+			return err
+		}
 	}
 
 	// Get function index and emit call instruction
 	funcIdx := c.getFuncIdx(call.Function)
 	c.emit(InstrCall, byte(funcIdx), byte(len(call.Args)))
+	return nil
 }
 
 func (c *Compiler) internString(s string) int {
