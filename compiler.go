@@ -11,7 +11,7 @@ var (
 		{Name: "Keyword", Pattern: `\b(val|if|then|else|end|while|do)\b`},
 		{Name: "comment", Pattern: `//.*|/\*.*?\*/`},
 		{Name: "whitespace", Pattern: `\s+`},
-		{Name: "String", Pattern: `"[^"]*"`},
+		{Name: "String", Pattern: `"(?:[^"\\]|\\.)*"`},
 		{Name: "Ident", Pattern: `\b([a-zA-Z_][a-zA-Z0-9_]*)\b`},
 		{Name: "Punct", Pattern: `==|!=|<=|>=|[-,()*/+%{};&!=:<>\[\]]`},
 		{Name: "Int", Pattern: `\d+`},
@@ -393,13 +393,12 @@ func (c *Compiler) compileCall(call *Call) {
 }
 
 func (c *Compiler) internString(s string) int {
-	// Remove quotes from the string literal
-	s = s[1 : len(s)-1]
+	unescaped := unescapeString(s)
 
-	if idx, ok := c.strings[s]; ok {
+	if idx, ok := c.strings[unescaped]; ok {
 		return idx
 	}
-	c.strings[s] = c.nextString
+	c.strings[unescaped] = c.nextString
 	c.nextString++
 	return c.nextString - 1
 }
@@ -432,4 +431,35 @@ func (c *Compiler) GetLineForPC(pc int) int {
 		}
 	}
 	return -1
+}
+
+// Add this helper function to handle string escapes
+func unescapeString(s string) string {
+	// Remove surrounding quotes first
+	s = s[1 : len(s)-1]
+
+	var result []rune
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++ // Skip the backslash
+			switch s[i] {
+			case 'n':
+				result = append(result, '\n')
+			case 't':
+				result = append(result, '\t')
+			case 'r':
+				result = append(result, '\r')
+			case '"':
+				result = append(result, '"')
+			case '\\':
+				result = append(result, '\\')
+			default:
+				// For unsupported escape sequences, keep them as-is
+				result = append(result, '\\', rune(s[i]))
+			}
+		} else {
+			result = append(result, rune(s[i]))
+		}
+	}
+	return string(result)
 }

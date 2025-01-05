@@ -131,11 +131,16 @@ func NewVmState(bytecode []byte, stackSize, localsSize int) *VMState {
 	}
 }
 
-func NewVM(bytecode []byte, stackSize, localsSize int) *VM {
+func NewVM(bytecode []byte, stackSize, localsSize int, debug bool) *VM {
+	debugChan := make(chan DebuggerCmd)
+	if !debug {
+		debugChan = nil
+	}
+
 	return &VM{
 		bytecode:        bytecode,
 		currentState:    NewVmState(bytecode, stackSize, localsSize),
-		debugChan:       make(chan DebuggerCmd),
+		debugChan:       debugChan,
 		stateChan:       make(chan *VMState),
 		history:         make([]*VMState, 0),
 		running:         false,
@@ -225,6 +230,26 @@ func (vm *VM) State() *VMState {
 }
 
 func (vm *VM) execute() {
+	// If debugChan is nil, run in non-debug mode
+	if vm.debugChan == nil {
+		for vm.running && vm.currentState.PC < len(vm.bytecode) {
+			err := vm.executeInstruction()
+			if err != nil {
+				fmt.Println("Execution error:", err)
+				vm.running = false
+				vm.stateChan <- vm.currentState.Clone()
+				return
+			}
+		}
+		// Program finished
+		vm.mu.Lock()
+		vm.running = false
+		vm.mu.Unlock()
+		vm.stateChan <- vm.currentState.Clone()
+		return
+	}
+
+	// Debug mode execution
 	for vm.running && vm.currentState.PC < len(vm.bytecode) {
 		cmd := <-vm.debugChan
 
@@ -251,6 +276,7 @@ func (vm *VM) execute() {
 			} else {
 				vm.stateChan <- vm.currentState.Clone()
 			}
+
 		case DebuggerCmdContinue:
 			for vm.running && vm.currentState.PC < len(vm.bytecode) {
 				currentLine := vm.sourceMap[vm.currentState.PC]
@@ -274,8 +300,6 @@ func (vm *VM) execute() {
 	vm.mu.Lock()
 	vm.running = false
 	vm.mu.Unlock()
-
-	// Send final state
 	vm.stateChan <- vm.currentState.Clone()
 }
 
@@ -374,7 +398,7 @@ func (vm *VM) executeAdd() error {
 	switch va := a.(type) {
 	case IntValue:
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)+int(vb)))
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)+int(va)))
 			return nil
 		}
 	case StringValue:
@@ -399,7 +423,7 @@ func (vm *VM) executeSub() error {
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)-int(vb)))
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)-int(va)))
 			return nil
 		}
 	}
@@ -416,7 +440,7 @@ func (vm *VM) executeMul() error {
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)*int(vb)))
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)*int(va)))
 			return nil
 		}
 	}
@@ -433,7 +457,7 @@ func (vm *VM) executeDiv() error {
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)/int(vb)))
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)/int(va)))
 			return nil
 		}
 	}
@@ -450,7 +474,7 @@ func (vm *VM) executeMod() error {
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(va)%int(vb)))
+			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)%int(va)))
 			return nil
 		}
 	}
@@ -465,9 +489,9 @@ func (vm *VM) executeEq() error {
 	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
 	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
 
-	switch va := a.(type) {
+	switch vb := b.(type) {
 	case IntValue:
-		if vb, ok := b.(IntValue); ok {
+		if va, ok := a.(IntValue); ok {
 			result := 0
 			if int(va) == int(vb) {
 				result = 1
@@ -476,9 +500,9 @@ func (vm *VM) executeEq() error {
 			return nil
 		}
 	case StringValue:
-		if vb, ok := b.(StringValue); ok {
+		if va, ok := a.(StringValue); ok {
 			result := 0
-			if vm.currentState.Strings[va.Index] == vm.currentState.Strings[vb.Index] {
+			if vm.currentState.Strings[vb.Index] == vm.currentState.Strings[va.Index] {
 				result = 1
 			}
 			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
