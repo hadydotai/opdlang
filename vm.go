@@ -169,6 +169,13 @@ func (vm *VM) SetLineBreakpoint(line int, enabled bool) {
 	}
 }
 
+func (vm *VM) HasBreakpoint(line int) bool {
+	vm.mu.RLock()
+	defer vm.mu.RUnlock()
+	enabled, ok := vm.lineBreakpoints[line]
+	return ok && enabled
+}
+
 func (vm *VM) Run() {
 	vm.mu.Lock()
 	vm.running = true

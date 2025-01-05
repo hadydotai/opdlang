@@ -54,6 +54,7 @@ func (c completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
 		"pc",
 		"restart", "r",
 		"load",
+		"source",
 		"quit", "q",
 		"help", "h",
 	}
@@ -85,6 +86,7 @@ Available Commands:
   pc               Show current program counter
   restart, r       Restart program execution
   load <file>      Load and execute a source file
+  source           Display source code with line numbers
   help, h          Show this help message
   quit, q          Exit debugger
 
@@ -185,6 +187,9 @@ func (r *REPL) Start() {
 			fmt.Printf("\033[32mLoaded file: %s\033[0m\n", args[1])
 			r.printState(r.vm.State())
 
+		case "source":
+			r.displaySource()
+
 		case "quit", "q":
 			fmt.Println("\033[32mGoodbye!\033[0m")
 			return
@@ -275,4 +280,108 @@ func (r *REPL) loadFile(filename string) error {
 	r.sourceCode = string(source)
 
 	return nil
+}
+
+// Add this new struct to handle interactive source view
+type SourceView struct {
+	lines        []string
+	currentLine  int
+	selectedLine int
+	maxWidth     int
+}
+
+// Add new method to handle interactive source viewing
+func (r *REPL) interactiveSource() {
+	if r.sourceCode == "" {
+		fmt.Println("\033[31mNo source code loaded\033[0m")
+		return
+	}
+
+	// Save current terminal state
+	oldState, err := readline.MakeRaw(0)
+	if err != nil {
+		fmt.Printf("\033[31mError: %v\033[0m\n", err)
+		return
+	}
+	defer readline.Restore(0, oldState)
+
+	view := &SourceView{
+		lines:        strings.Split(r.sourceCode, "\n"),
+		currentLine:  r.vm.State().SourceLine,
+		selectedLine: r.vm.State().SourceLine,
+		maxWidth:     len(strconv.Itoa(len(strings.Split(r.sourceCode, "\n")))),
+	}
+
+	// Clear screen and hide cursor
+	fmt.Print("\033[2J\033[H\033[?25l")
+	defer fmt.Print("\033[?25h") // Show cursor when done
+
+	for {
+		// Clear screen and move to top
+		fmt.Print("\033[H")
+
+		// Print header
+		fmt.Println("\033[1;36mInteractive Source View - Use ↑/↓ to navigate, Space to toggle breakpoint, q to quit\033[0m\n")
+
+		view.render(r.vm)
+
+		// Read a single keystroke
+		var b [3]byte
+		os.Stdin.Read(b[:])
+
+		switch b[0] {
+		case 3: // Ctrl-C
+			return
+		case 'q', 'Q':
+			return
+		case 32: // Space
+			r.vm.SetLineBreakpoint(view.selectedLine, !r.vm.HasBreakpoint(view.selectedLine))
+		case 27: // Escape sequence
+			if len(b) >= 3 {
+				switch b[2] {
+				case 65: // Up arrow
+					if view.selectedLine > 1 {
+						view.selectedLine--
+					}
+				case 66: // Down arrow
+					if view.selectedLine < len(view.lines) {
+						view.selectedLine++
+					}
+				}
+			}
+		}
+	}
+}
+
+// Add render method for SourceView
+func (v *SourceView) render(vm *VM) {
+	for i, line := range v.lines {
+		lineNum := i + 1
+		lineNumStr := fmt.Sprintf("%*d", v.maxWidth, lineNum)
+
+		// Determine line styling
+		if lineNum == v.selectedLine {
+			if lineNum == v.currentLine {
+				// Selected + current line (cyan background + yellow background + bold)
+				fmt.Printf("\033[46m%s │\033[43;1m %s \033[0m\n", lineNumStr, line)
+			} else {
+				// Selected line (cyan background + bold)
+				fmt.Printf("\033[46m%s │\033[0m\033[1m %s\033[0m\n", lineNumStr, line)
+			}
+		} else if lineNum == v.currentLine {
+			// Current execution line (yellow background)
+			fmt.Printf("\033[90m%s │\033[0m\033[43m %s \033[0m\n", lineNumStr, line)
+		} else if vm.HasBreakpoint(lineNum) {
+			// Breakpoint (red dot)
+			fmt.Printf("\033[31m%s ● \033[0m%s\n", lineNumStr, line)
+		} else {
+			// Normal line
+			fmt.Printf("\033[90m%s │\033[0m %s\n", lineNumStr, line)
+		}
+	}
+}
+
+// Update the displaySource method to call interactiveSource
+func (r *REPL) displaySource() {
+	r.interactiveSource()
 }
