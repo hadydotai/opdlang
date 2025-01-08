@@ -42,13 +42,14 @@ func NewParser(filename string) (*Parser, error) {
 
 func (p *Parser) Parse() (*Program, Token, []*LanguageError) {
 	program := &Program{
-		Statements: []Statement{},
+		Statements: make([]Statement, 0),
 	}
 	lastTok := Token{}
 	var errs []*LanguageError
 	for {
 		lastTok = p.lexer.Peek()
 		if lastTok.Type == EOF {
+			p.lexer.Next()
 			break
 		}
 		if lastTok.Type == Error {
@@ -59,60 +60,127 @@ func (p *Parser) Parse() (*Program, Token, []*LanguageError) {
 				Message:  lastTok.Value,
 				Filename: p.lexer.filename,
 				Source:   p.lexer.buf,
-				Snippet:  p.lexer.buf[lastTok.Offset:],
+				Snippet:  p.lexer.buf[lastTok.Offset : lastTok.Offset+len(lastTok.Value)],
 			})
 			break
 		}
-
 		if lastTok.Type == Keyword {
-			switch lastTok.Value {
-			case "val":
-				assignment := &Assignment{}
-
-				// Parse identifier
-				p.lexer.Next()          // consume 'val'
-				ident := p.lexer.Next() // Consume the next token
-				if ident.Type == Ident {
-					assignment.Variable = ident.Value
-					equals := p.lexer.Next()
-					if equals.Type == Operator && equals.Value == "=" {
-						expr, err := p.parseExpr()
-						if err != nil {
-							errs = append(errs, err)
-						}
-						assignment.Expr = expr
-					} else {
-						errs = append(errs, &LanguageError{
-							Kind:     ErrorKindParser,
-							Line:     ident.Line,
-							Column:   ident.Column,
-							Message:  fmt.Sprintf("expected '=' after identifier, got %s", equals.Value),
-							Help:     "make sure the assignment is valid, e.g. val foo = 1 + 2",
-							Filename: p.lexer.filename,
-							Source:   p.lexer.buf,
-							Snippet:  p.lexer.buf[ident.Offset:],
-						})
-					}
-				} else {
-					errs = append(errs, &LanguageError{
-						Kind:     ErrorKindParser,
-						Line:     ident.Line,
-						Column:   ident.Column,
-						Message:  fmt.Sprintf("expected identifier after 'val', got %s", ident.Value),
-						Help:     "make sure the assignment is valid, e.g. val foo = 1 + 2",
-						Filename: p.lexer.filename,
-						Source:   p.lexer.buf,
-						Snippet:  p.lexer.buf[ident.Offset:],
-					})
-				}
-				program.Statements = append(program.Statements, Statement{
-					Assignment: assignment,
-				})
+			stmt, err := p.parseStatement()
+			if err != nil {
+				errs = append(errs, err)
+				continue
 			}
+			program.Statements = append(program.Statements, *stmt)
 		}
 
+		p.lexer.Next()
 	}
 	return program, lastTok, errs
+}
+
+func (p *Parser) parseBlock() ([]Statement, *LanguageError) {
+	statements := []Statement{}
+	doKW := p.lexer.Peek()
+	if doKW.Value != "do" {
+		return nil, &LanguageError{
+			Kind:     ErrorKindParser,
+			Line:     doKW.Line,
+			Column:   doKW.Column,
+			Message:  fmt.Sprintf("expected 'do' after 'if', got %s", doKW.Value),
+			Help:     "make sure the block is valid, e.g. do print(\"hello\") end",
+			Filename: p.lexer.filename,
+			Source:   p.lexer.buf,
+			Snippet:  p.lexer.buf[doKW.Offset : doKW.Offset+len(doKW.Value)],
+		}
+	}
+	p.lexer.Next() // consume 'do'
+	for p.lexer.Peek().Value != "end" {
+		stmt, err := p.parseStatement()
+		if err != nil {
+			return statements, err
+		}
+		statements = append(statements, *stmt)
+	}
+	endKW := p.lexer.Next()
+	if endKW.Value != "end" {
+		return statements, &LanguageError{
+			Kind:    ErrorKindParser,
+			Line:    endKW.Line,
+			Column:  endKW.Column,
+			Message: fmt.Sprintf("expected 'end' after block, got %s", endKW.Value),
+		}
+	}
+	return statements, nil
+}
+
+func (p *Parser) parseStatement() (*Statement, *LanguageError) {
+	keyword := p.lexer.Next()
+	switch keyword.Value {
+	case "val":
+		assignment := &Assignment{}
+		ident := p.lexer.Next()
+		if ident.Type == Ident {
+			assignment.Variable = ident.Value
+			equals := p.lexer.Next()
+			if equals.Type == Operator && equals.Value == "=" {
+				var err *LanguageError
+				assignment.Expr, err = p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				return nil, &LanguageError{
+					Kind:     ErrorKindParser,
+					Line:     ident.Line,
+					Column:   ident.Column,
+					Message:  fmt.Sprintf("expected '=' after identifier, got %s", equals.Value),
+					Help:     "make sure the assignment is valid, e.g. val foo = 1 + 2",
+					Filename: p.lexer.filename,
+					Source:   p.lexer.buf,
+					Snippet:  p.lexer.buf[ident.Offset : ident.Offset+len(ident.Value)],
+				}
+			}
+		} else {
+			return nil, &LanguageError{
+				Kind:     ErrorKindParser,
+				Line:     ident.Line,
+				Column:   ident.Column,
+				Message:  fmt.Sprintf("expected identifier after 'val', got %s", ident.Value),
+				Help:     "make sure the assignment is valid, e.g. val foo = 1 + 2",
+				Filename: p.lexer.filename,
+				Source:   p.lexer.buf,
+				Snippet:  p.lexer.buf[ident.Offset : ident.Offset+len(ident.Value)],
+			}
+		}
+		return &Statement{
+			Assignment: assignment,
+		}, nil
+	case "if":
+		ifStmt := &IfStmt{}
+		var err *LanguageError
+		ifStmt.Condition, err = p.parseExpr()
+		if err != nil {
+			return nil, &LanguageError{
+				Kind:     ErrorKindParser,
+				Line:     keyword.Line,
+				Column:   keyword.Column,
+				Message:  fmt.Sprintf("expected expression after 'if', got %s", keyword.Value),
+				Help:     "make sure the if statement is valid, e.g. if (1 + 2) == 3 then print(\"hello\") end",
+				Filename: p.lexer.filename,
+				Source:   p.lexer.buf,
+				Snippet:  p.lexer.buf[keyword.Offset : keyword.Offset+len(keyword.Value)],
+			}
+		}
+		statements, err := p.parseBlock()
+		if err != nil {
+			return nil, err
+		}
+		ifStmt.Then = statements
+		return &Statement{
+			IfStmt: ifStmt,
+		}, nil
+	}
+	return nil, nil
 }
 
 func (p *Parser) parseTerm() (*Term, *LanguageError) {
@@ -133,7 +201,7 @@ func (p *Parser) parseTerm() (*Term, *LanguageError) {
 				Help:     "make sure the number is a valid integer, e.g. 123, 0xfff, 0o007, 0b101",
 				Filename: p.lexer.filename,
 				Source:   p.lexer.buf,
-				Snippet:  p.lexer.buf[termTok.Offset:],
+				Snippet:  p.lexer.buf[termTok.Offset : termTok.Offset+len(termTok.Value)],
 			}
 		}
 		term.Number = &num
@@ -171,7 +239,7 @@ func (p *Parser) parseTerm() (*Term, *LanguageError) {
 				Help:     "make sure subexpressions are valid, e.g. (1 + 2) * 3",
 				Filename: p.lexer.filename,
 				Source:   p.lexer.buf,
-				Snippet:  p.lexer.buf[rParen.Offset:],
+				Snippet:  p.lexer.buf[rParen.Offset : rParen.Offset+len(rParen.Value)],
 			}
 		}
 		term.SubExpr = expr
@@ -184,7 +252,7 @@ func (p *Parser) parseTerm() (*Term, *LanguageError) {
 			Help:     "make sure the term is valid, e.g. 123, \"hello\", foo(1, 2, 3), (1 + 2) * 3",
 			Filename: p.lexer.filename,
 			Source:   p.lexer.buf,
-			Snippet:  p.lexer.buf[termTok.Offset:],
+			Snippet:  p.lexer.buf[termTok.Offset : termTok.Offset+len(termTok.Value)],
 		}
 	}
 	return term, nil
@@ -201,10 +269,15 @@ func (p *Parser) parseExpr() (*Expr, *LanguageError) {
 	opTok := p.lexer.Peek()
 
 	if opTok.Type == Operator {
-		if opPrecedence, ok := exprOperatorsTable[opTok.Value]; ok {
-			opTok = p.lexer.Next()
-
-			expr.Op = &opTok.Value
+		opTok = p.lexer.Next()
+		opTok2 := p.lexer.Peek()
+		op := opTok.Value
+		if opTok2.Type == Operator {
+			op = op + opTok2.Value
+			p.lexer.Next()
+		}
+		if opPrecedence, ok := exprOperatorsTable[op]; ok {
+			expr.Op = &op
 			right, err := p.parseExpr()
 			if err != nil {
 				return expr, err
@@ -238,7 +311,7 @@ func (p *Parser) parseFunctionCall(ident Token) (*Term, *LanguageError) {
 			Args:     []*Expr{},
 		},
 	}
-	for p.lexer.Peek().Value != ")" {
+	for p.lexer.Peek().Value != ")" && p.lexer.Peek().Type != Keyword {
 		var arg *Expr
 		arg, err = p.parseExpr()
 		if err != nil {
@@ -251,7 +324,7 @@ func (p *Parser) parseFunctionCall(ident Token) (*Term, *LanguageError) {
 			continue
 		}
 	}
-	rParen := p.lexer.Next() // consume ')'
+	rParen := p.lexer.Peek()
 	if rParen.Value != ")" {
 		return term, &LanguageError{
 			Kind:     ErrorKindParser,
@@ -261,9 +334,10 @@ func (p *Parser) parseFunctionCall(ident Token) (*Term, *LanguageError) {
 			Help:     "make sure the function call is valid, e.g. foo(1, 2, 3)",
 			Filename: p.lexer.filename,
 			Source:   p.lexer.buf,
-			Snippet:  p.lexer.buf[ident.Offset:],
+			Snippet:  p.lexer.buf[ident.Offset : ident.Offset+len(ident.Value)],
 		}
 	}
+	p.lexer.Next() // consume ')'
 
 	return term, err
 }

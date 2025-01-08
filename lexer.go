@@ -135,8 +135,8 @@ func NewLexer(filename string, buf string) *Lexer {
 }
 
 func (lex *Lexer) Next() Token {
-	// skip whitespaces
 	lex.skipWhitespaces()
+
 	if lex.curr == -1 {
 		return Token{
 			Type:     EOF,
@@ -186,17 +186,24 @@ func (lex *Lexer) Next() Token {
 }
 
 func (lex *Lexer) Peek() Token {
-	throwaway := &Lexer{
-		buf:      lex.buf,
-		curr:     lex.curr,
-		currPos:  lex.currPos,
-		nextPos:  lex.nextPos,
-		line:     lex.line,
-		column:   lex.column,
-		offset:   lex.offset,
-		filename: lex.filename,
-	}
-	tok := throwaway.Next()
+	// Save current state
+	currPos := lex.currPos
+	curr := lex.curr
+	offset := lex.offset
+	line := lex.line
+	column := lex.column
+	nextPos := lex.nextPos
+
+	// Get next token
+	tok := lex.Next()
+
+	// Restore state
+	lex.currPos = currPos
+	lex.curr = curr
+	lex.offset = offset
+	lex.line = line
+	lex.column = column
+	lex.nextPos = nextPos
 	return tok
 }
 
@@ -213,7 +220,10 @@ func (lex *Lexer) skipWhitespaces() {
 func (lex *Lexer) scanComment() Token {
 	start := lex.currPos
 	lex.next() // skip '/'
-	for lex.curr > 0 && lex.curr != '\n' {
+	for {
+		if lex.peekNext() == '\n' {
+			break
+		}
 		lex.next()
 	}
 	tok := Token{
@@ -224,6 +234,7 @@ func (lex *Lexer) scanComment() Token {
 		Column:   lex.column - len(lex.buf[start:lex.currPos]) - 1,
 		Filename: lex.filename,
 	}
+	lex.next() // skip '\n'
 	return tok
 }
 
@@ -395,21 +406,23 @@ func (lex *Lexer) scanString() Token {
 // advances the internal state to point to the next rune in
 // the input buffer.
 func (lex *Lexer) next() {
-	if lex.nextPos < len(lex.buf) {
-		lex.currPos = lex.nextPos
-		r, w := rune(lex.buf[lex.nextPos]), 1
-		if r >= utf8.RuneSelf {
-			r, w = utf8.DecodeRuneInString(lex.buf[lex.nextPos:])
-		}
-		lex.nextPos += w
-		lex.column += w
-		lex.curr = r
-		lex.offset = lex.nextPos
-	} else {
+	if lex.nextPos >= len(lex.buf) {
 		lex.currPos = len(lex.buf)
 		lex.curr = -1 // EOF
 		lex.offset = len(lex.buf)
+		return
 	}
+
+	lex.currPos = lex.nextPos
+	r, w := rune(lex.buf[lex.nextPos]), 1
+	if r >= utf8.RuneSelf {
+		r, w = utf8.DecodeRuneInString(lex.buf[lex.nextPos:])
+	}
+	lex.nextPos += w
+	lex.column += w
+	lex.curr = r
+	lex.offset = lex.nextPos
+
 }
 
 // return the next rune in the input buffer, or -1 if EOF
