@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"hadydotai/opdlang/lang"
 )
 
 type RunCommand struct {
@@ -31,21 +30,6 @@ func (cmd *RunCommand) Execute(args []string) error {
 	// compiler.code = bytecode
 	// runBytecode(compiler)
 	// return nil
-}
-
-func runBytecode(compiler *lang.Compiler) {
-	vm := lang.NewVM(compiler.Code, 1024, 1024, false)
-	lang.RegisterBuiltins(vm)
-
-	// Register source map and strings
-	for pc, line := range compiler.GetSourceMap() {
-		vm.RegisterSourceMap(pc, line)
-	}
-	vm.RegisterStrings(compiler.Strings)
-
-	vm.Run()
-	// Wait for final state (after all operations complete)
-	<-vm.StateChan
 }
 
 func init() {
