@@ -59,8 +59,9 @@ func (cmd *CompileCommand) Execute(args []string) error {
 		vm.RegisterStrings(compiler.Strings)
 
 		if cmd.StepDebug {
-			vm.SetLineBreakpoint(1, true)
 			repl := NewREPL(vm, compiler)
+			vm.SetLineBreakpoint(1, true)
+			repl.sourceCode = string(source)
 			repl.Start()
 		} else {
 			logging.Log(logging.LogLevelInfo, "Running compiled output")
