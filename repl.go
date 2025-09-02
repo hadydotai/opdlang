@@ -111,7 +111,7 @@ func (r *REPL) Start() {
 
 	// Start VM execution and get initial state
 	r.vm.Run()
-	<-r.vm.StateChan
+	// <-r.vm.StateChan
 
 	for {
 		line, err := r.rl.Readline()
