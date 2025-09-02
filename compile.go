@@ -10,6 +10,7 @@ import (
 type CompileCommand struct {
 	Output       string `short:"o" long:"output" description:"Output file and path of the compiled bytecode file" required:"yes"`
 	DumpBytecode bool   `short:"d" long:"dump" description:"Dump a visual analysis of the bytecode for inspection"`
+	StepDebug    bool   `short:"s" long:"stepdebug" description:"Start execution in the step debugger"`
 	Run          bool   `short:"r" long:"run" description:"Run the compiled bytecode file"`
 	Args         struct {
 		Files []string `positional-arg-name:"FILES" required:"yes"`
@@ -48,8 +49,25 @@ func (cmd *CompileCommand) Execute(args []string) error {
 	logging.Log(logging.LogLevelInfo, "Successfully compiled", "file-input", cmd.Args.Files[0], "file-output", cmd.Output)
 
 	if cmd.Run {
-		logging.Log(logging.LogLevelInfo, "Running compiled output")
-		runBytecode(compiler)
+		vm := lang.NewVM(compiler.Code, 1024, 1024, cmd.StepDebug)
+		lang.RegisterBuiltins(vm)
+
+		// Register source map and strings
+		for pc, line := range compiler.GetSourceMap() {
+			vm.RegisterSourceMap(pc, line)
+		}
+		vm.RegisterStrings(compiler.Strings)
+
+		if cmd.StepDebug {
+			vm.SetLineBreakpoint(1, true)
+			repl := NewREPL(vm, compiler)
+			repl.Start()
+		} else {
+			logging.Log(logging.LogLevelInfo, "Running compiled output")
+			vm.Run()
+			// Wait for final state (after all operations complete)
+			<-vm.StateChan
+		}
 	}
 
 	if cmd.DumpBytecode {
