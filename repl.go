@@ -321,7 +321,7 @@ func (r *REPL) interactiveSource() {
 		fmt.Print("\033[H")
 
 		// Print header
-		fmt.Println("\033[1;36mInteractive Source View - Use ↑/↓ to navigate, Space to toggle breakpoint, q to quit\033[0m\n")
+		fmt.Println("\033[1;36mInteractive Source View - Use ↑/↓ to navigate, Space to toggle breakpoint, q to quit\033[0m")
 
 		view.render(r.vm)
 
