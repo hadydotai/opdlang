@@ -4,8 +4,15 @@ Naming is hard okay. Anyway, Opd language is a bytecode compiled toy language
 that's not currently meant to be useful. In fact, about the only thing it does
 is print strings and do basic math.
 
-The gist of it though is the debugger. Opd is bytecode compiled, here's an
-example of a bytecode dump for [simple.dl](./samples/simple.dl)
+The gist of it though is the debugger. Opd is bytecode compiled and bytecode
+interpreted, I wanted to implement a step, time-travelling debugger. The goal
+was to quickly get from point A to point B so I can start prototyping the
+debugger. The purpose is not to build or design a language, implement a good
+compiler or AST to bytecode translation.
+
+## Inspect the Bytecode
+
+Here's an example of a bytecode dump for [simple.dl](./samples/simple.dl)
 
 ```sh
 go run . compile samples/simple.dl -o simple.bc -r -lnone -d
@@ -22,11 +29,27 @@ about the flags but for a quick reference regarding the above command:
   program's output
 - `-d` will dump the bytecode in the format you see above for inspection
 
-This is all well dandy, the real thing here is the debugging. I wanted to
-implement a step, time-travelling debugger. The goal (as you'll see is evident
-in the code) was to quickly get from point A to point B so I can start
-prototyping the debugger. The compiler is, lackluster to say the least but is
-stable.
+## Debug the Bytecode
+
+Here's an example of a debugging session for [simple.dl](./samples/simple.dl)
+
+```sh
+go run . compile samples/simple.dl -o simple.bc -r -lnone -d -s
+```
+
+![simple.dl bytecode dump](./public/debugger.png)
+
+- `-s` will start execution in the step debugger with a breakpoint on line 1 of
+  the source code
+
+During debugging you can always inspect the source visually to see where you are
+in the execution line wise and where your breakpoints are at using `source`
+
+```sh
+> source
+```
+
+You can move the program counter forward or backwards using `n` or `b`.
 
 ### Current bytecode limitiations
 
