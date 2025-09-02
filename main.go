@@ -1,222 +1,208 @@
 package main
 
 import (
-	"flag"
-	"fmt"
+	"io"
+	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/alecthomas/participle/v2"
+	"github.com/jessevdk/go-flags"
 )
+
+type LogLevel string
 
 const (
-	exitSuccess = 0
-	exitError   = 1
+	LogLevelNone  LogLevel = "none"
+	LogLevelInfo  LogLevel = "info"
+	LogLevelDebug LogLevel = "debug"
 )
 
-func main() {
-	os.Exit(realMain())
+type Options struct {
+	LogLevel LogLevel `short:"l" long:"loglevel" description:"Set the level of logging" choice:"none" choice:"info" choice:"debug" default:"info"`
 }
 
-func realMain() int {
-	// Command line flags
-	var (
-		compile = flag.Bool("compile", false, "Compile source to bytecode file")
-		run     = flag.Bool("run", false, "Run the compiled bytecode file")
-		debug   = flag.Bool("debug", false, "Start in debug mode")
-		output  = flag.String("o", "", "Output file for compiled bytecode")
-	)
+var (
+	opts        Options
+	flagsparser = flags.NewParser(&opts, flags.Default)
+	logger      *slog.Logger
+)
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] [filename]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Without arguments, starts an interactive REPL\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
-		flag.PrintDefaults()
+func setupLogger() {
+	sink := io.Discard
+	if opts.LogLevel != LogLevelNone {
+		sink = os.Stderr
 	}
 
-	flag.Parse()
-
-	// No arguments - start REPL
-	if flag.NArg() == 0 && !*compile && !*run {
-		return startREPL("")
+	level := slog.LevelDebug
+	if opts.LogLevel == LogLevelInfo {
+		level = slog.LevelInfo
 	}
+	handler := slog.NewTextHandler(sink, &slog.HandlerOptions{
+		Level: level,
+	})
+	logger = slog.New(handler)
+}
 
-	// Get the input file
-	inputFile := flag.Arg(0)
-	if inputFile == "" {
-		fmt.Fprintln(os.Stderr, "Error: input file required")
-		flag.Usage()
-		return exitError
+func log(level LogLevel, msg string, args ...any) {
+	if logger == nil {
+		return
 	}
-
-	// Determine output file if not specified
-	if *compile && *output == "" {
-		*output = strings.TrimSuffix(inputFile, filepath.Ext(inputFile)) + ".bc"
-	}
-
-	// Handle different modes
-	switch {
-	case *compile:
-		return compileFile(inputFile, *output)
-	case *run:
-		return runCompiledFile(inputFile, *debug)
+	switch level {
+	case LogLevelDebug:
+		logger.Debug(msg, args...)
+	case LogLevelInfo:
+		logger.Info(msg, args...)
 	default:
-		return runSourceFile(inputFile, *debug)
+		panic("passing something else than Debug/Info, if you want to disable logging then call binary with -lnone or --loglevel=none")
 	}
 }
 
-func compileFile(inputFile, outputFile string) int {
-	source, err := os.ReadFile(inputFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-		return exitError
+func main() {
+	flagsparser.CommandHandler = func(command flags.Commander, args []string) error {
+		setupLogger()
+		return command.Execute(args)
 	}
 
-	bytecode, err := compileSource(string(source), inputFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
-		return exitError
-	}
-
-	err = os.WriteFile(outputFile, []byte(bytecode), 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing bytecode: %v\n", err)
-		return exitError
-	}
-
-	return exitSuccess
-}
-
-func runCompiledFile(filename string, debug bool) int {
-	bytecode, err := os.ReadFile(filename)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-		return exitError
-	}
-
-	if debug {
-		fmt.Fprintf(os.Stderr, "Debug mode not supported for compiled files yet\n")
-		return exitError
-	}
-
-	vm := NewVM(bytecode, 1024, 1024, debug)
-	RegisterBuiltins(vm)
-
-	// Start VM execution
-	vm.Run()
-	<-vm.stateChan // Wait for completion
-
-	return exitSuccess
-}
-
-func runSourceFile(filename string, debug bool) int {
-	source, err := os.ReadFile(filename)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-		return exitError
-	}
-
-	if debug {
-		return startREPL(string(source))
-	}
-
-	parser := participle.MustBuild[Program](
-		participle.Lexer(basicLexer),
-	)
-
-	program, err := parser.ParseString(filename, string(source))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
-		return exitError
-	}
-
-	compiler := NewCompiler()
-	bytecode, err := compiler.compileProgram(program)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
-		return exitError
-	}
-
-	// compiler.DebugPrint() // This will show us the compiled bytecode
-
-	vm := NewVM(bytecode, 1024, 1024, debug)
-	RegisterBuiltins(vm)
-
-	// Register source map and strings
-	for pc, line := range compiler.GetSourceMap() {
-		vm.RegisterSourceMap(pc, line)
-	}
-	vm.RegisterStrings(compiler.strings)
-
-	vm.Run()
-	// Wait for final state (after all operations complete)
-	<-vm.stateChan
-
-	return exitSuccess
-}
-
-func startREPL(initialSource string) int {
-	var program *Program
-	var err error
-
-	if initialSource != "" {
-		parser := participle.MustBuild[Program](participle.Lexer(basicLexer))
-		program, err = parser.ParseString("", initialSource)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
-			return exitError
+	if _, err := flagsparser.Parse(); err != nil {
+		switch flagsErr := err.(type) {
+		case flags.ErrorType:
+			if flagsErr == flags.ErrHelp {
+				os.Exit(0)
+			}
+			os.Exit(1)
+		default:
+			os.Exit(1)
 		}
 	}
 
-	compiler := NewCompiler()
-	var bytecode []byte
-	if program != nil {
-		bytecode, err = compiler.compileProgram(program)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
-			return exitError
-		}
+	if logger == nil {
+		setupLogger()
 	}
-
-	vm := NewVM(bytecode, 1024, 1024, true)
-	RegisterBuiltins(vm)
-
-	// Register source map from compiler
-	for pc, line := range compiler.GetSourceMap() {
-		vm.RegisterSourceMap(pc, line)
-	}
-
-	// Register the strings from the compiler
-	vm.RegisterStrings(compiler.strings)
-
-	// Set initial breakpoint at PC=0 if we have source
-	if initialSource != "" {
-		vm.SetLineBreakpoint(1, true)
-	}
-
-	repl := NewREPL(vm, compiler)
-	repl.Start()
-	return exitSuccess
 }
 
-func compileSource(source string, inputFile string) ([]byte, error) {
-	parser := participle.MustBuild[Program](
-		participle.Lexer(basicLexer),
-	)
+// func runCompiledFile(filename string, debug bool) int {
+// 	bytecode, err := os.ReadFile(filename)
+// 	if err != nil {
+// 		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+// 		return exitError
+// 	}
 
-	program, err := parser.ParseString(inputFile, source)
-	if err != nil {
-		return nil, fmt.Errorf("parse error: %v", err)
-	}
+// 	vm := NewVM(bytecode, 1024, 1024, debug)
+// 	RegisterBuiltins(vm)
 
-	compiler := NewCompiler()
-	bytecode, err := compiler.compileProgram(program)
-	if err != nil {
-		return nil, fmt.Errorf("compilation error: %v", err)
-	}
-	return bytecode, nil
-}
+// 	// Start VM execution
+// 	vm.Run()
+// 	<-vm.stateChan // Wait for completion
+
+// 	return exitSuccess
+// }
+
+// func runSourceFile(filename string, debug bool) int {
+// 	source, err := os.ReadFile(filename)
+// 	if err != nil {
+// 		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+// 		return exitError
+// 	}
+
+// 	if debug {
+// 		return startREPL(string(source))
+// 	}
+
+// 	parser := participle.MustBuild[Program](
+// 		participle.Lexer(basicLexer),
+// 	)
+
+// 	program, err := parser.ParseString(filename, string(source))
+// 	if err != nil {
+// 		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
+// 		return exitError
+// 	}
+
+// 	compiler := NewCompiler()
+// 	bytecode, err := compiler.compileProgram(program)
+// 	if err != nil {
+// 		fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
+// 		return exitError
+// 	}
+
+// 	// compiler.DebugPrint() // This will show us the compiled bytecode
+
+// 	vm := NewVM(bytecode, 1024, 1024, debug)
+// 	RegisterBuiltins(vm)
+
+// 	// Register source map and strings
+// 	for pc, line := range compiler.GetSourceMap() {
+// 		vm.RegisterSourceMap(pc, line)
+// 	}
+// 	vm.RegisterStrings(compiler.strings)
+
+// 	vm.Run()
+// 	// Wait for final state (after all operations complete)
+// 	<-vm.stateChan
+
+// 	return exitSuccess
+// }
+
+// func startREPL(initialSource string) int {
+// 	var program *Program
+// 	var err error
+
+// 	if initialSource != "" {
+// 		parser := participle.MustBuild[Program](participle.Lexer(basicLexer))
+// 		program, err = parser.ParseString("", initialSource)
+// 		if err != nil {
+// 			fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
+// 			return exitError
+// 		}
+// 	}
+
+// 	compiler := NewCompiler()
+// 	var bytecode []byte
+// 	if program != nil {
+// 		bytecode, err = compiler.compileProgram(program)
+// 		if err != nil {
+// 			fmt.Fprintf(os.Stderr, "Compilation error: %v\n", err)
+// 			return exitError
+// 		}
+// 	}
+
+// 	vm := NewVM(bytecode, 1024, 1024, true)
+// 	RegisterBuiltins(vm)
+
+// 	// Register source map from compiler
+// 	for pc, line := range compiler.GetSourceMap() {
+// 		vm.RegisterSourceMap(pc, line)
+// 	}
+
+// 	// Register the strings from the compiler
+// 	vm.RegisterStrings(compiler.strings)
+
+// 	// Set initial breakpoint at PC=0 if we have source
+// 	if initialSource != "" {
+// 		vm.SetLineBreakpoint(1, true)
+// 	}
+
+// 	repl := NewREPL(vm, compiler)
+// 	repl.Start()
+// 	return exitSuccess
+// }
+
+// func compileSource(source string, inputFile string) ([]byte, error) {
+// 	parser := participle.MustBuild[Program](
+// 		participle.Lexer(basicLexer),
+// 	)
+
+// 	program, err := parser.ParseString(inputFile, source)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("parse error: %v", err)
+// 	}
+
+// 	compiler := NewCompiler()
+// 	bytecode, err := compiler.compileProgram(program)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("compilation error: %v", err)
+// 	}
+// 	return bytecode, nil
+// }
 
 // // func setupVM(bytecode []byte) *VM {
 // // 	vm := NewVM(bytecode, 1024, 1024)
