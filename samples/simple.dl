@@ -1,0 +1,8 @@
+val name = "Hady"
+val career_start = 2006
+val this_year    = 2025
+
+print("-------------------\n")
+print("Hello, my name is ", name, "\n")
+print("-------------------\n")
+print("I've been a professional software engineer for ", this_year - career_start, " years \n")
