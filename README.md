@@ -64,7 +64,7 @@ time to fix it in the near future, for now it serves the original purpose.
 
 # License
 
-schdl Copyright (C) 2025 hadydotai
+Copyright (C) 2025 hadydotai
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License as published by the Free
