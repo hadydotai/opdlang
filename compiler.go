@@ -691,8 +691,8 @@ func (c *Compiler) GetSourceMap() map[int]int {
 }
 
 func (c *Compiler) GetLineForPC(pc int) int {
-	for pc, line := range c.sourceMap {
-		if pc == pc {
+	for srcPC, line := range c.sourceMap {
+		if srcPC == pc {
 			return line
 		}
 	}
