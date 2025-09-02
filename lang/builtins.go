@@ -1,4 +1,4 @@
-package main
+package lang
 
 import "fmt"
 
@@ -14,7 +14,7 @@ func RegisterBuiltins(vm *VM) {
 			case IntValue:
 				fmt.Print(int(v))
 			case StringValue:
-				fmt.Print(vm.currentState.Strings[v.Index])
+				fmt.Print(vm.CurrentState.Strings[v.Index])
 			}
 		}
 		return IntValue(0)

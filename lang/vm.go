@@ -1,4 +1,4 @@
-package main
+package lang
 
 import (
 	"fmt"
@@ -107,12 +107,12 @@ func (s StringValue) Type() ValueType { return ValueTypeString }
 type GoFunction func(args []Value) Value
 
 type VM struct {
-	currentState *VMState
-	history      []*VMState
-	bytecode     []byte
+	CurrentState *VMState
+	History      []*VMState
+	Bytecode     []byte
 
 	debugChan chan DebuggerCmd
-	stateChan chan *VMState
+	StateChan chan *VMState
 
 	mu              sync.RWMutex
 	running         bool
@@ -139,11 +139,11 @@ func NewVM(bytecode []byte, stackSize, localsSize int, debug bool) *VM {
 	}
 
 	return &VM{
-		bytecode:        bytecode,
-		currentState:    NewVmState(bytecode, stackSize, localsSize),
+		Bytecode:        bytecode,
+		CurrentState:    NewVmState(bytecode, stackSize, localsSize),
 		debugChan:       debugChan,
-		stateChan:       make(chan *VMState),
-		history:         make([]*VMState, 0),
+		StateChan:       make(chan *VMState),
+		History:         make([]*VMState, 0),
 		running:         false,
 		functions:       make(map[int]GoFunction),
 		sourceMap:       make(map[int]int),
@@ -188,7 +188,7 @@ func (vm *VM) Run() {
 		// Wait for all print operations
 		vm.wg.Wait()
 		// Signal completion
-		vm.stateChan <- vm.currentState.Clone()
+		vm.StateChan <- vm.CurrentState.Clone()
 	}()
 }
 
@@ -199,7 +199,7 @@ func (vm *VM) RunBlock() {
 
 func (vm *VM) RunUntil(pc int) {
 	vm.running = true
-	vm.currentState.PC = pc
+	vm.CurrentState.PC = pc
 	go vm.execute()
 }
 
@@ -211,7 +211,7 @@ func (vm *VM) Debug(cmd DebuggerCmd) *VMState {
 
 	// Send command and wait for response
 	vm.debugChan <- cmd
-	return <-vm.stateChan
+	return <-vm.StateChan
 }
 
 func (vm *VM) StepNext() *VMState {
@@ -233,18 +233,18 @@ func (vm *VM) Continue() {
 func (vm *VM) State() *VMState {
 	vm.mu.RLock()
 	defer vm.mu.RUnlock()
-	return vm.currentState.Clone()
+	return vm.CurrentState.Clone()
 }
 
 func (vm *VM) execute() {
 	// If debugChan is nil, run in non-debug mode
 	if vm.debugChan == nil {
-		for vm.running && vm.currentState.PC < len(vm.bytecode) {
+		for vm.running && vm.CurrentState.PC < len(vm.Bytecode) {
 			err := vm.executeInstruction()
 			if err != nil {
 				fmt.Println("Execution error:", err)
 				vm.running = false
-				vm.stateChan <- vm.currentState.Clone()
+				vm.StateChan <- vm.CurrentState.Clone()
 				return
 			}
 		}
@@ -252,18 +252,18 @@ func (vm *VM) execute() {
 		vm.mu.Lock()
 		vm.running = false
 		vm.mu.Unlock()
-		vm.stateChan <- vm.currentState.Clone()
+		vm.StateChan <- vm.CurrentState.Clone()
 		return
 	}
 
 	// Debug mode execution
-	for vm.running && vm.currentState.PC < len(vm.bytecode) {
+	for vm.running && vm.CurrentState.PC < len(vm.Bytecode) {
 		cmd := <-vm.debugChan
 
 		switch cmd {
 		case DebuggerCmdPause:
 			vm.running = false
-			vm.stateChan <- vm.currentState.Clone()
+			vm.StateChan <- vm.CurrentState.Clone()
 			return
 
 		case DebuggerCmdStepNext:
@@ -271,22 +271,22 @@ func (vm *VM) execute() {
 			if err != nil {
 				fmt.Println("Execution error:", err)
 				vm.running = false
-				vm.stateChan <- vm.currentState.Clone()
+				vm.StateChan <- vm.CurrentState.Clone()
 				return
 			}
-			vm.stateChan <- vm.currentState.Clone()
+			vm.StateChan <- vm.CurrentState.Clone()
 
 		case DebuggerCmdStepBack:
-			if len(vm.history) > 0 {
+			if len(vm.History) > 0 {
 				vm.stepToPreviousLine()
-				vm.stateChan <- vm.currentState.Clone()
+				vm.StateChan <- vm.CurrentState.Clone()
 			} else {
-				vm.stateChan <- vm.currentState.Clone()
+				vm.StateChan <- vm.CurrentState.Clone()
 			}
 
 		case DebuggerCmdContinue:
-			for vm.running && vm.currentState.PC < len(vm.bytecode) {
-				currentLine := vm.sourceMap[vm.currentState.PC]
+			for vm.running && vm.CurrentState.PC < len(vm.Bytecode) {
+				currentLine := vm.sourceMap[vm.CurrentState.PC]
 				if vm.lineBreakpoints[currentLine] {
 					break
 				}
@@ -294,12 +294,12 @@ func (vm *VM) execute() {
 				if err != nil {
 					fmt.Println("Execution error:", err)
 					vm.running = false
-					vm.stateChan <- vm.currentState.Clone()
+					vm.StateChan <- vm.CurrentState.Clone()
 					return
 				}
-				vm.history = append(vm.history, vm.currentState.Clone())
+				vm.History = append(vm.History, vm.CurrentState.Clone())
 			}
-			vm.stateChan <- vm.currentState.Clone()
+			vm.StateChan <- vm.CurrentState.Clone()
 		}
 	}
 
@@ -307,14 +307,14 @@ func (vm *VM) execute() {
 	vm.mu.Lock()
 	vm.running = false
 	vm.mu.Unlock()
-	vm.stateChan <- vm.currentState.Clone()
+	vm.StateChan <- vm.CurrentState.Clone()
 }
 
 func (vm *VM) executeInstruction() error {
-	instruction := vm.bytecode[vm.currentState.PC]
+	instruction := vm.Bytecode[vm.CurrentState.PC]
 	// fmt.Printf("Executing instruction at PC=%d: %v\n", vm.currentState.PC, Instr(instruction))
 	// fmt.Printf("Stack before: %v\n", vm.currentState.Stack)
-	vm.currentState.PC++
+	vm.CurrentState.PC++
 
 	switch inst := Instr(instruction); inst {
 	case InstrPush:
@@ -368,52 +368,52 @@ func (vm *VM) executeInstruction() error {
 }
 
 func (vm *VM) executePush() error {
-	if vm.currentState.PC >= len(vm.bytecode) {
+	if vm.CurrentState.PC >= len(vm.Bytecode) {
 		return fmt.Errorf("program counter out of bounds")
 	}
-	value := int(vm.bytecode[vm.currentState.PC])
-	vm.currentState.Stack = append(vm.currentState.Stack, IntValue(value))
-	vm.currentState.PC++
+	value := int(vm.Bytecode[vm.CurrentState.PC])
+	vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(value))
+	vm.CurrentState.PC++
 	return nil
 }
 
 func (vm *VM) executePop() error {
-	if len(vm.currentState.Stack) == 0 {
+	if len(vm.CurrentState.Stack) == 0 {
 		return fmt.Errorf("stack underflow")
 	}
-	if vm.currentState.PC >= len(vm.bytecode) {
+	if vm.CurrentState.PC >= len(vm.Bytecode) {
 		return fmt.Errorf("program counter out of bounds")
 	}
-	varIdx := int(vm.bytecode[vm.currentState.PC])
-	if varIdx >= len(vm.currentState.Locals) {
+	varIdx := int(vm.Bytecode[vm.CurrentState.PC])
+	if varIdx >= len(vm.CurrentState.Locals) {
 		return fmt.Errorf("variable index out of bounds: %d", varIdx)
 	}
-	vm.currentState.Locals[varIdx] = vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
-	vm.currentState.PC++
+	vm.CurrentState.Locals[varIdx] = vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-1]
+	vm.CurrentState.PC++
 	return nil
 }
 
 func (vm *VM) executeAdd() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 
 	switch va := a.(type) {
 	case IntValue:
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)+int(va)))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(int(vb)+int(va)))
 			return nil
 		}
 	case StringValue:
 		if vb, ok := b.(StringValue); ok {
 			// String concatenation
-			newStr := vm.currentState.Strings[va.Index] + vm.currentState.Strings[vb.Index]
+			newStr := vm.CurrentState.Strings[va.Index] + vm.CurrentState.Strings[vb.Index]
 			newIdx := vm.RegisterString(newStr)
-			vm.currentState.Stack = append(vm.currentState.Stack, StringValue{Index: newIdx})
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, StringValue{Index: newIdx})
 			return nil
 		}
 	}
@@ -421,16 +421,16 @@ func (vm *VM) executeAdd() error {
 }
 
 func (vm *VM) executeSub() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)-int(va)))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(int(vb)-int(va)))
 			return nil
 		}
 	}
@@ -438,16 +438,16 @@ func (vm *VM) executeSub() error {
 }
 
 func (vm *VM) executeMul() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)*int(va)))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(int(vb)*int(va)))
 			return nil
 		}
 	}
@@ -455,16 +455,16 @@ func (vm *VM) executeMul() error {
 }
 
 func (vm *VM) executeDiv() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)/int(va)))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(int(vb)/int(va)))
 			return nil
 		}
 	}
@@ -472,16 +472,16 @@ func (vm *VM) executeDiv() error {
 }
 
 func (vm *VM) executeMod() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(int(vb)%int(va)))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(int(vb)%int(va)))
 			return nil
 		}
 	}
@@ -489,12 +489,12 @@ func (vm *VM) executeMod() error {
 }
 
 func (vm *VM) executeEq() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 
 	switch vb := b.(type) {
 	case IntValue:
@@ -503,16 +503,16 @@ func (vm *VM) executeEq() error {
 			if int(va) == int(vb) {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	case StringValue:
 		if va, ok := a.(StringValue); ok {
 			result := 0
-			if vm.currentState.Strings[vb.Index] == vm.currentState.Strings[va.Index] {
+			if vm.CurrentState.Strings[vb.Index] == vm.CurrentState.Strings[va.Index] {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	}
@@ -520,12 +520,12 @@ func (vm *VM) executeEq() error {
 }
 
 func (vm *VM) executeNeq() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 	switch va := a.(type) {
 	case IntValue:
 		if vb, ok := b.(IntValue); ok {
@@ -533,16 +533,16 @@ func (vm *VM) executeNeq() error {
 			if int(va) != int(vb) {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	case StringValue:
 		if vb, ok := b.(StringValue); ok {
 			result := 0
-			if vm.currentState.Strings[va.Index] != vm.currentState.Strings[vb.Index] {
+			if vm.CurrentState.Strings[va.Index] != vm.CurrentState.Strings[vb.Index] {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	}
@@ -550,12 +550,12 @@ func (vm *VM) executeNeq() error {
 }
 
 func (vm *VM) executeLt() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
@@ -563,7 +563,7 @@ func (vm *VM) executeLt() error {
 			if int(va) < int(vb) {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	}
@@ -571,19 +571,19 @@ func (vm *VM) executeLt() error {
 }
 
 func (vm *VM) executeGt() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
 			result := 0
 			if int(va) > int(vb) {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	}
@@ -591,19 +591,19 @@ func (vm *VM) executeGt() error {
 }
 
 func (vm *VM) executeLte() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
 			result := 0
 			if int(va) <= int(vb) {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	}
@@ -611,19 +611,19 @@ func (vm *VM) executeLte() error {
 }
 
 func (vm *VM) executeGte() error {
-	if len(vm.currentState.Stack) < 2 {
+	if len(vm.CurrentState.Stack) < 2 {
 		return fmt.Errorf("stack underflow")
 	}
-	a := vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	b := vm.currentState.Stack[len(vm.currentState.Stack)-2]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-2]
+	a := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	b := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-2]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-2]
 	if va, ok := a.(IntValue); ok {
 		if vb, ok := b.(IntValue); ok {
 			result := 0
 			if int(va) >= int(vb) {
 				result = 1
 			}
-			vm.currentState.Stack = append(vm.currentState.Stack, IntValue(result))
+			vm.CurrentState.Stack = append(vm.CurrentState.Stack, IntValue(result))
 			return nil
 		}
 	}
@@ -631,105 +631,105 @@ func (vm *VM) executeGte() error {
 }
 
 func (vm *VM) executeLoad() error {
-	if vm.currentState.PC >= len(vm.bytecode) {
+	if vm.CurrentState.PC >= len(vm.Bytecode) {
 		return fmt.Errorf("program counter out of bounds")
 	}
-	varIdx := int(vm.bytecode[vm.currentState.PC])
-	if varIdx >= len(vm.currentState.Locals) {
+	varIdx := int(vm.Bytecode[vm.CurrentState.PC])
+	if varIdx >= len(vm.CurrentState.Locals) {
 		return fmt.Errorf("variable index out of bounds: %d", varIdx)
 	}
-	vm.currentState.Stack = append(vm.currentState.Stack, vm.currentState.Locals[varIdx])
-	vm.currentState.PC++
+	vm.CurrentState.Stack = append(vm.CurrentState.Stack, vm.CurrentState.Locals[varIdx])
+	vm.CurrentState.PC++
 	return nil
 }
 
 func (vm *VM) executeStore() error {
-	if vm.currentState.PC >= len(vm.bytecode) {
+	if vm.CurrentState.PC >= len(vm.Bytecode) {
 		return fmt.Errorf("program counter out of bounds")
 	}
-	if len(vm.currentState.Stack) == 0 {
+	if len(vm.CurrentState.Stack) == 0 {
 		return fmt.Errorf("stack underflow")
 	}
-	varIdx := int(vm.bytecode[vm.currentState.PC])
-	if varIdx >= len(vm.currentState.Locals) {
-		vm.currentState.Locals = append(vm.currentState.Locals, nil)
+	varIdx := int(vm.Bytecode[vm.CurrentState.PC])
+	if varIdx >= len(vm.CurrentState.Locals) {
+		vm.CurrentState.Locals = append(vm.CurrentState.Locals, nil)
 	}
-	vm.currentState.Locals[varIdx] = vm.currentState.Stack[len(vm.currentState.Stack)-1]
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
-	vm.currentState.PC++
+	vm.CurrentState.Locals[varIdx] = vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-1]
+	vm.CurrentState.PC++
 	return nil
 }
 
 func (vm *VM) executeJmp() error {
 	// Read two bytes for jump address
-	if vm.currentState.PC+1 >= len(vm.bytecode) {
+	if vm.CurrentState.PC+1 >= len(vm.Bytecode) {
 		return fmt.Errorf("invalid jump address")
 	}
-	highByte := int(vm.bytecode[vm.currentState.PC])
-	lowByte := int(vm.bytecode[vm.currentState.PC+1])
+	highByte := int(vm.Bytecode[vm.CurrentState.PC])
+	lowByte := int(vm.Bytecode[vm.CurrentState.PC+1])
 	jumpAddr := (highByte << 8) | lowByte
-	vm.currentState.PC = jumpAddr
+	vm.CurrentState.PC = jumpAddr
 	return nil
 }
 
 func (vm *VM) executeJmpIfZero() error {
-	if len(vm.currentState.Stack) == 0 {
+	if len(vm.CurrentState.Stack) == 0 {
 		return fmt.Errorf("stack underflow")
 	}
 	// Read two bytes for jump address
-	if vm.currentState.PC+1 >= len(vm.bytecode) {
+	if vm.CurrentState.PC+1 >= len(vm.Bytecode) {
 		return fmt.Errorf("invalid jump address")
 	}
-	highByte := int(vm.bytecode[vm.currentState.PC])
-	lowByte := int(vm.bytecode[vm.currentState.PC+1])
+	highByte := int(vm.Bytecode[vm.CurrentState.PC])
+	lowByte := int(vm.Bytecode[vm.CurrentState.PC+1])
 	jumpAddr := (highByte << 8) | lowByte
 
-	condition := vm.currentState.Stack[len(vm.currentState.Stack)-1]
+	condition := vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
 	// Pop the condition value
-	vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
+	vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-1]
 
 	if condition == IntValue(0) {
-		vm.currentState.PC = jumpAddr
+		vm.CurrentState.PC = jumpAddr
 	} else {
-		vm.currentState.PC += 2 // Skip over jump address
+		vm.CurrentState.PC += 2 // Skip over jump address
 	}
 	return nil
 }
 
 func (vm *VM) executeCall() error {
-	funcIdx := int(vm.bytecode[vm.currentState.PC])
-	numArgs := int(vm.bytecode[vm.currentState.PC+1])
+	funcIdx := int(vm.Bytecode[vm.CurrentState.PC])
+	numArgs := int(vm.Bytecode[vm.CurrentState.PC+1])
 
 	if fn, ok := vm.functions[funcIdx]; ok {
 		// Get arguments in the correct order
 		args := make([]Value, numArgs)
 		for i := numArgs - 1; i >= 0; i-- {
-			if len(vm.currentState.Stack) == 0 {
+			if len(vm.CurrentState.Stack) == 0 {
 				return fmt.Errorf("stack underflow while getting function arguments")
 			}
-			args[i] = vm.currentState.Stack[len(vm.currentState.Stack)-1]
-			vm.currentState.Stack = vm.currentState.Stack[:len(vm.currentState.Stack)-1]
+			args[i] = vm.CurrentState.Stack[len(vm.CurrentState.Stack)-1]
+			vm.CurrentState.Stack = vm.CurrentState.Stack[:len(vm.CurrentState.Stack)-1]
 		}
 
 		result := fn(args)
-		vm.currentState.Stack = append(vm.currentState.Stack, result)
-		vm.currentState.PC += 2
+		vm.CurrentState.Stack = append(vm.CurrentState.Stack, result)
+		vm.CurrentState.PC += 2
 		return nil
 	}
 
-	vm.currentState.CallStack = append(vm.currentState.CallStack, vm.currentState.PC)
-	vm.currentState.PC = int(vm.currentState.Locals[vm.currentState.PC].(IntValue))
-	vm.currentState.PC++
+	vm.CurrentState.CallStack = append(vm.CurrentState.CallStack, vm.CurrentState.PC)
+	vm.CurrentState.PC = int(vm.CurrentState.Locals[vm.CurrentState.PC].(IntValue))
+	vm.CurrentState.PC++
 	return fmt.Errorf("unknown function index: %d", funcIdx)
 }
 
 func (vm *VM) executeRet() error {
-	if len(vm.currentState.CallStack) == 0 {
+	if len(vm.CurrentState.CallStack) == 0 {
 		return fmt.Errorf("call stack underflow")
 	}
-	vm.currentState.PC = vm.currentState.CallStack[len(vm.currentState.CallStack)-1]
-	vm.currentState.CallStack = vm.currentState.CallStack[:len(vm.currentState.CallStack)-1]
-	vm.currentState.PC++
+	vm.CurrentState.PC = vm.CurrentState.CallStack[len(vm.CurrentState.CallStack)-1]
+	vm.CurrentState.CallStack = vm.CurrentState.CallStack[:len(vm.CurrentState.CallStack)-1]
+	vm.CurrentState.PC++
 	return nil
 }
 
@@ -739,15 +739,15 @@ func (vm *VM) executeHalt() error {
 }
 
 func (vm *VM) executePushStr() error {
-	if vm.currentState.PC >= len(vm.bytecode) {
+	if vm.CurrentState.PC >= len(vm.Bytecode) {
 		return fmt.Errorf("program counter out of bounds")
 	}
-	strIdx := int(vm.bytecode[vm.currentState.PC])
-	if strIdx >= len(vm.currentState.Strings) {
+	strIdx := int(vm.Bytecode[vm.CurrentState.PC])
+	if strIdx >= len(vm.CurrentState.Strings) {
 		return fmt.Errorf("string index out of bounds: %d", strIdx)
 	}
-	vm.currentState.Stack = append(vm.currentState.Stack, StringValue{Index: strIdx})
-	vm.currentState.PC++
+	vm.CurrentState.Stack = append(vm.CurrentState.Stack, StringValue{Index: strIdx})
+	vm.CurrentState.PC++
 	return nil
 }
 
@@ -756,8 +756,8 @@ func (vm *VM) RegisterFunction(idx int, fn GoFunction) {
 }
 
 func (vm *VM) RegisterString(s string) int {
-	vm.currentState.Strings = append(vm.currentState.Strings, s)
-	return len(vm.currentState.Strings) - 1
+	vm.CurrentState.Strings = append(vm.CurrentState.Strings, s)
+	return len(vm.CurrentState.Strings) - 1
 }
 
 func (vm *VM) RegisterStrings(strings map[string]int) {
@@ -770,15 +770,15 @@ func (vm *VM) RegisterStrings(strings map[string]int) {
 	}
 
 	// Resize the strings slice if needed
-	if maxIdx >= len(vm.currentState.Strings) {
+	if maxIdx >= len(vm.CurrentState.Strings) {
 		newStrings := make([]string, maxIdx+1)
-		copy(newStrings, vm.currentState.Strings)
-		vm.currentState.Strings = newStrings
+		copy(newStrings, vm.CurrentState.Strings)
+		vm.CurrentState.Strings = newStrings
 	}
 
 	// Register all strings at their correct indices
 	for str, idx := range strings {
-		vm.currentState.Strings[idx] = str
+		vm.CurrentState.Strings[idx] = str
 	}
 }
 
@@ -787,11 +787,11 @@ func (vm *VM) RegisterSourceMap(pc, line int) {
 }
 
 func (vm *VM) stepToNextLine() error {
-	currentLine := vm.sourceMap[vm.currentState.PC]
+	currentLine := vm.sourceMap[vm.CurrentState.PC]
 
-	for vm.currentState.PC < len(vm.bytecode) {
+	for vm.CurrentState.PC < len(vm.Bytecode) {
 		// Store the current state BEFORE executing the instruction
-		vm.history = append(vm.history, vm.currentState.Clone())
+		vm.History = append(vm.History, vm.CurrentState.Clone())
 
 		err := vm.executeInstruction()
 		if err != nil {
@@ -799,8 +799,8 @@ func (vm *VM) stepToNextLine() error {
 		}
 
 		// If we've reached an instruction from a different line, stop
-		if newLine := vm.sourceMap[vm.currentState.PC]; newLine != currentLine && newLine != 0 {
-			vm.currentState.SourceLine = newLine
+		if newLine := vm.sourceMap[vm.CurrentState.PC]; newLine != currentLine && newLine != 0 {
+			vm.CurrentState.SourceLine = newLine
 			return nil
 		}
 	}
@@ -808,20 +808,20 @@ func (vm *VM) stepToNextLine() error {
 }
 
 func (vm *VM) stepToPreviousLine() {
-	if len(vm.history) == 0 {
+	if len(vm.History) == 0 {
 		return
 	}
 
-	currentLine := vm.sourceMap[vm.currentState.PC]
+	currentLine := vm.sourceMap[vm.CurrentState.PC]
 	var previousState *VMState
 
-	for len(vm.history) > 0 {
-		previousState = vm.history[len(vm.history)-1].Clone()
-		vm.history = vm.history[:len(vm.history)-1]
+	for len(vm.History) > 0 {
+		previousState = vm.History[len(vm.History)-1].Clone()
+		vm.History = vm.History[:len(vm.History)-1]
 
 		if newLine := vm.sourceMap[previousState.PC]; newLine != currentLine && newLine != 0 {
-			vm.currentState = previousState
-			vm.currentState.SourceLine = newLine
+			vm.CurrentState = previousState
+			vm.CurrentState.SourceLine = newLine
 			break
 		}
 	}
@@ -834,7 +834,7 @@ func (vm *VM) Stop() {
 	vm.mu.Unlock()
 	// Drain any pending state from the channel
 	select {
-	case <-vm.stateChan:
+	case <-vm.StateChan:
 	default:
 	}
 }

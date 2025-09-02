@@ -1,0 +1,425 @@
+package lang
+
+import (
+	"fmt"
+
+	"github.com/alecthomas/participle/v2/lexer"
+)
+
+type Compiler struct {
+	Code        []byte
+	labels      map[string]int
+	vars        map[string]int
+	funcs       map[string]int
+	Strings     map[string]int
+	nextVar     int
+	nextLabel   int
+	nextFunc    int
+	nextString  int
+	currentPos  int
+	currentLine int
+	sourceMap   map[int]int
+}
+
+func NewCompiler() *Compiler {
+	return &Compiler{
+		Code:        make([]byte, 0),
+		labels:      make(map[string]int),
+		vars:        make(map[string]int),
+		funcs:       make(map[string]int),
+		Strings:     make(map[string]int),
+		nextVar:     0,
+		nextLabel:   0,
+		nextFunc:    0,
+		nextString:  0,
+		currentPos:  0,
+		currentLine: 1,
+		sourceMap:   make(map[int]int),
+	}
+}
+
+func (c *Compiler) DebugPrint() {
+	fmt.Println("\033[1;36mBytecode:\033[0m")
+	i := 0
+	for i < len(c.Code) {
+		instr := Instr(c.Code[i])
+		fmt.Printf("\033[90m%04d:\033[0m \033[1;33m%-12v\033[0m", i, instr)
+
+		switch instr {
+		case InstrPush:
+			if i+1 < len(c.Code) {
+				fmt.Printf("    \033[1;32mvalue:\033[0m %-20d", c.Code[i+1])
+				i++
+			}
+		case InstrPushStr:
+			if i+1 < len(c.Code) {
+				strIdx := c.Code[i+1]
+				var foundStr string
+				for str, idx := range c.Strings {
+					if idx == int(strIdx) {
+						foundStr = str
+						break
+					}
+				}
+				fmt.Printf("    \033[1;32mstring:\033[0m %-20q    \033[90m(str_%d)\033[0m", foundStr, strIdx)
+				i++
+			}
+		case InstrCall:
+			if i+2 < len(c.Code) {
+				funcIdx := int(c.Code[i+1])
+				funcName := "?"
+				for name, idx := range builtinFunctions {
+					if idx == funcIdx {
+						funcName = name
+						break
+					}
+				}
+				fmt.Printf("    \033[1;32mfunc:\033[0m   %-20s    \033[90m(func_%d, args=%d)\033[0m",
+					funcName, funcIdx, c.Code[i+2])
+				i += 2
+			}
+		case InstrLoad, InstrStore:
+			if i+1 < len(c.Code) {
+				varIdx := c.Code[i+1]
+				varName := "?"
+				for name, idx := range c.vars {
+					if idx == int(varIdx) {
+						varName = name
+						break
+					}
+				}
+				fmt.Printf("    \033[1;32mvar:\033[0m    %-20s    \033[90m(var_%d)\033[0m", varName, varIdx)
+				i++
+			}
+		case InstrJmp, InstrJmpIfZero:
+			if i+2 < len(c.Code) {
+				jumpAddr := (int(c.Code[i+1]) << 8) | int(c.Code[i+2])
+				fmt.Printf("    \033[1;32mjump:\033[0m   %-20d", jumpAddr)
+				i += 2
+			}
+		}
+		fmt.Println()
+		i++
+	}
+
+	fmt.Println("\n\033[1;36mSymbol Tables:\033[0m")
+
+	fmt.Println("\n\033[1;35mVariables:\033[0m")
+	for name, idx := range c.vars {
+		fmt.Printf("    %-30s \033[90m-> var_%d\033[0m\n", name, idx)
+	}
+
+	fmt.Println("\n\033[1;35mFunctions:\033[0m")
+	for name, idx := range c.funcs {
+		fmt.Printf("    %-30s \033[90m-> func_%d\033[0m\n", name, idx)
+	}
+
+	fmt.Println("\n\033[1;35mBuiltin Functions:\033[0m")
+	for name, idx := range builtinFunctions {
+		fmt.Printf("    %-30s \033[90m-> func_%d\033[0m\n", name, idx)
+	}
+
+	fmt.Println("\n\033[1;35mLabels:\033[0m")
+	for name, addr := range c.labels {
+		fmt.Printf("    %-30s \033[90m-> addr_%d\033[0m\n", name, addr)
+	}
+
+	fmt.Println("\n\033[1;35mStrings:\033[0m")
+	for str, idx := range c.Strings {
+		fmt.Printf("    %-30q \033[90m-> str_%d\033[0m\n", str, idx)
+	}
+}
+
+func (c *Compiler) emit(op Instr, operands ...byte) {
+	c.Code = append(c.Code, byte(op))
+	c.currentPos++
+	c.Code = append(c.Code, operands...)
+	c.currentPos += len(operands)
+}
+
+func (c *Compiler) getVarIdx(name string) int {
+	if idx, ok := c.vars[name]; ok {
+		return idx
+	}
+	c.vars[name] = c.nextVar
+	c.nextVar++
+	return c.nextVar - 1
+}
+
+func (c *Compiler) getFuncIdx(name string) int {
+	if idx, ok := builtinFunctions[name]; ok {
+		return idx
+	}
+	if idx, ok := c.funcs[name]; ok {
+		return idx
+	}
+	c.funcs[name] = c.nextFunc
+	c.nextFunc++
+	return c.nextFunc - 1
+}
+
+func (c *Compiler) createLabel() string {
+	label := fmt.Sprintf("L%d", c.nextLabel)
+	c.nextLabel++
+	return label
+}
+
+func (c *Compiler) setLabel(label string) {
+	c.labels[label] = c.currentPos
+}
+
+func (c *Compiler) CompileProgram(program *Program) ([]byte, error) {
+	for _, stmt := range program.Statements {
+		if err := c.compileStatement(&stmt); err != nil {
+			return nil, err
+		}
+	}
+	c.emit(InstrHalt)
+	return c.Code, nil
+}
+
+// Update the compiler's expression compilation
+func (c *Compiler) compileExpr(expr *Expr) error {
+	// If there's no operator, just compile the term
+	if expr.Op == nil {
+		return c.compileTerm(expr.Left)
+	}
+
+	// Compile left operand
+	if err := c.compileTerm(expr.Left); err != nil {
+		return err
+	}
+
+	// Compile right operand
+	if err := c.compileExpr(expr.Right); err != nil {
+		return err
+	}
+
+	// Emit the operator instruction
+	switch *expr.Op {
+	case "+":
+		c.emit(InstrAdd)
+	case "-":
+		c.emit(InstrSub)
+	case "*":
+		c.emit(InstrMul)
+	case "/":
+		c.emit(InstrDiv)
+	case "%":
+		c.emit(InstrMod)
+	case "==":
+		c.emit(InstrEq)
+	case "!=":
+		c.emit(InstrNeq)
+	case "<":
+		c.emit(InstrLt)
+	case "<=":
+		c.emit(InstrLte)
+	case ">":
+		c.emit(InstrGt)
+	case ">=":
+		c.emit(InstrGte)
+	}
+
+	return nil
+}
+
+func (c *Compiler) compileStatement(stmt *Statement) error {
+	switch {
+	case stmt.Assignment != nil:
+		c.registerLine(stmt.Assignment.Pos)
+		if err := c.compileExpr(stmt.Assignment.Expr); err != nil {
+			return err
+		}
+		varIdx := c.getVarIdx(stmt.Assignment.Variable)
+		c.emit(InstrStore, byte(varIdx))
+	case stmt.IfStmt != nil:
+		c.registerLine(stmt.IfStmt.Pos)
+		endLabel := c.createLabel()
+		elseLabel := c.createLabel()
+
+		c.compileExpr(stmt.IfStmt.Condition)
+		c.emit(InstrJmpIfZero)
+		jumpPos := c.currentPos
+		c.Code = append(c.Code, 0, 0) // Reserve 2 bytes for jump address
+		c.currentPos += 2
+
+		for _, s := range stmt.IfStmt.Then {
+			if err := c.compileStatement(&s); err != nil {
+				return err
+			}
+		}
+
+		c.emit(InstrJmp)
+		endJumpPos := c.currentPos
+		c.Code = append(c.Code, 0, 0) // Reserve 2 bytes for jump address
+		c.currentPos += 2
+
+		c.setLabel(elseLabel)
+		if stmt.IfStmt.Else != nil {
+			for _, s := range stmt.IfStmt.Else {
+				if err := c.compileStatement(&s); err != nil {
+					return err
+				}
+			}
+		}
+
+		c.setLabel(endLabel)
+
+		// Update jump positions using actual instruction positions
+		elseAddr := c.labels[elseLabel]
+		c.Code = append(c.Code[:jumpPos], append([]byte{
+			byte(elseAddr >> 8),
+			byte(elseAddr & 0xff),
+		}, c.Code[jumpPos+2:]...)...)
+
+		endAddr := c.labels[endLabel]
+		c.Code = append(c.Code[:endJumpPos], append([]byte{
+			byte(endAddr >> 8),
+			byte(endAddr & 0xff),
+		}, c.Code[endJumpPos+2:]...)...)
+	case stmt.WhileStmt != nil:
+		c.registerLine(stmt.WhileStmt.Pos)
+		startLabel := c.createLabel()
+		endLabel := c.createLabel()
+
+		// Start of loop
+		c.setLabel(startLabel)
+		c.compileExpr(stmt.WhileStmt.Condition)
+
+		// Jump to end if condition is false
+		c.emit(InstrJmpIfZero)
+		jumpToEndPos := c.currentPos
+		c.Code = append(c.Code, 0, 0) // Reserve 2 bytes for jump address
+		c.currentPos += 2
+
+		// Compile loop body
+		for _, s := range stmt.WhileStmt.Body {
+			if err := c.compileStatement(&s); err != nil {
+				return err
+			}
+		}
+
+		// Jump back to start of loop
+		c.emit(InstrJmp)
+		startAddr := c.labels[startLabel]
+		c.Code = append(c.Code, byte(startAddr>>8), byte(startAddr&0xff))
+		c.currentPos += 2
+
+		// Set end label and patch the conditional jump
+		c.setLabel(endLabel)
+		endAddr := c.labels[endLabel]
+
+		// Patch the jump-if-zero instruction with the correct end address
+		c.Code[jumpToEndPos] = byte(endAddr >> 8)
+		c.Code[jumpToEndPos+1] = byte(endAddr & 0xff)
+
+	case stmt.Call != nil:
+		c.registerLine(stmt.Call.Pos)
+		return c.compileCall(stmt.Call)
+	}
+	return nil
+}
+
+func (c *Compiler) compileTerm(term *Term) error {
+	switch {
+	case term.Number != nil:
+		c.emit(InstrPush, byte(*term.Number))
+	case term.String != nil:
+		stringIdx := c.internString(*term.String)
+		c.emit(InstrPushStr, byte(stringIdx))
+	case term.Variable != nil:
+		varIdx := c.getVarIdx(*term.Variable)
+		c.emit(InstrLoad, byte(varIdx))
+	case term.Call != nil:
+		return c.compileCall(term.Call)
+	case term.SubExpr != nil:
+		return c.compileExpr(term.SubExpr)
+	}
+	return nil
+}
+
+func (c *Compiler) compileCall(call *Call) error {
+	for _, arg := range call.Args {
+		if err := c.compileExpr(arg); err != nil {
+			return err
+		}
+	}
+
+	// Get function index and emit call instruction
+	funcIdx := c.getFuncIdx(call.Function)
+	c.emit(InstrCall, byte(funcIdx), byte(len(call.Args)))
+	return nil
+}
+
+func (c *Compiler) internString(s string) int {
+	unescaped := unescapeString(s)
+
+	if idx, ok := c.Strings[unescaped]; ok {
+		return idx
+	}
+	c.Strings[unescaped] = c.nextString
+	c.nextString++
+	return c.nextString - 1
+}
+
+func (c *Compiler) registerLine(pos lexer.Position) {
+	if pos.Line != c.currentLine {
+		c.currentLine = pos.Line
+		c.sourceMap[c.currentPos] = c.currentLine
+	}
+}
+
+func (c *Compiler) GetPCForLine(line int) int {
+	for pc, l := range c.sourceMap {
+		if l == line {
+			return pc
+		}
+	}
+	return -1
+}
+
+// Add a method to get the source map
+func (c *Compiler) GetSourceMap() map[int]int {
+	return c.sourceMap
+}
+
+func (c *Compiler) GetLineForPC(pc int) int {
+	for srcPC, line := range c.sourceMap {
+		if srcPC == pc {
+			return line
+		}
+	}
+	return -1
+}
+
+// Add this helper function to handle string escapes
+func unescapeString(s string) string {
+	// Remove surrounding quotes first
+	s = s[1 : len(s)-1]
+
+	var result []rune
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++ // Skip the backslash
+			switch s[i] {
+			case 'n':
+				result = append(result, '\n')
+			case 't':
+				result = append(result, '\t')
+			case 'r':
+				result = append(result, '\r')
+			case '"':
+				result = append(result, '"')
+			case '\\':
+				result = append(result, '\\')
+			default:
+				// For unsupported escape sequences, keep them as-is
+				result = append(result, '\\', rune(s[i]))
+			}
+		} else {
+			result = append(result, rune(s[i]))
+		}
+	}
+	return string(result)
+}

@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
+	"hadydotai/opdlang/lang"
+	"hadydotai/opdlang/logging"
 	"os"
-
-	"github.com/alecthomas/participle/v2"
 )
 
 type CompileCommand struct {
@@ -18,7 +18,7 @@ type CompileCommand struct {
 var compileCommand CompileCommand
 
 func (cmd *CompileCommand) Execute(args []string) error {
-	log(LogLevelInfo, "Compiling single file", "file-input", cmd.Args.Files[0], "file-output", cmd.Output)
+	logging.Log(logging.LogLevelInfo, "Compiling single file", "file-input", cmd.Args.Files[0], "file-output", cmd.Output)
 	//TODO(@hadydotai): supporting only one input file for now
 	sourceFile := cmd.Args.Files[0]
 	source, err := os.ReadFile(sourceFile)
@@ -26,33 +26,28 @@ func (cmd *CompileCommand) Execute(args []string) error {
 		return fmt.Errorf("failed to read source file %s: %w", sourceFile, err)
 	}
 
-	parser := participle.MustBuild[Program](
-		participle.Lexer(basicLexer),
-	)
-
-	log(LogLevelDebug, "Parsing source")
-	program, err := parser.ParseString(sourceFile, string(source))
+	program, err := lang.Parse(sourceFile, string(source))
 	if err != nil {
-		return fmt.Errorf("parse error: %v", err)
+		return err
 	}
 
-	log(LogLevelDebug, "Compilation started")
-	compiler := NewCompiler()
-	bytecode, err := compiler.compileProgram(program)
+	logging.Log(logging.LogLevelDebug, "Compilation started")
+	compiler := lang.NewCompiler()
+	bytecode, err := compiler.CompileProgram(program)
 	if err != nil {
 		return fmt.Errorf("failed to compile source file %s: %w", sourceFile, err)
 	}
 
-	log(LogLevelDebug, "Committing output to disk")
+	logging.Log(logging.LogLevelDebug, "Committing output to disk")
 	err = os.WriteFile(cmd.Output, bytecode, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write compiled bytecode to disk: %w", err)
 	}
 
-	log(LogLevelInfo, "Successfully compiled", "file-input", cmd.Args.Files[0], "file-output", cmd.Output)
+	logging.Log(logging.LogLevelInfo, "Successfully compiled", "file-input", cmd.Args.Files[0], "file-output", cmd.Output)
 
 	if cmd.Run {
-		log(LogLevelInfo, "Running compiled output")
+		logging.Log(logging.LogLevelInfo, "Running compiled output")
 		runBytecode(compiler)
 	}
 	return nil

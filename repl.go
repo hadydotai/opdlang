@@ -6,18 +6,19 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alecthomas/participle/v2"
+	"hadydotai/opdlang/lang"
+
 	"github.com/chzyer/readline"
 )
 
 type REPL struct {
-	vm         *VM
-	compiler   *Compiler
+	vm         *lang.VM
+	compiler   *lang.Compiler
 	rl         *readline.Instance
 	sourceCode string
 }
 
-func NewREPL(vm *VM, compiler *Compiler) *REPL {
+func NewREPL(vm *lang.VM, compiler *lang.Compiler) *REPL {
 	// Configure readline with nice defaults
 	rlConfig := &readline.Config{
 		Prompt:          "\033[32m⟩\033[0m ",
@@ -110,7 +111,7 @@ func (r *REPL) Start() {
 
 	// Start VM execution and get initial state
 	r.vm.Run()
-	<-r.vm.stateChan
+	<-r.vm.StateChan
 
 	for {
 		line, err := r.rl.Readline()
@@ -130,7 +131,7 @@ func (r *REPL) Start() {
 			r.printHelp()
 
 		case "step", "s", "n":
-			if r.vm.currentState.PC >= len(r.vm.bytecode) {
+			if r.vm.CurrentState.PC >= len(r.vm.Bytecode) {
 				fmt.Println("\033[31mProgram has finished execution\033[0m")
 				r.restartVM()
 				continue
@@ -168,7 +169,7 @@ func (r *REPL) Start() {
 
 		case "pc":
 			state := r.vm.State()
-			fmt.Printf("PC: %d (Instruction: %s)\n", state.PC, Instr(r.vm.bytecode[state.PC]))
+			fmt.Printf("PC: %d (Instruction: %s)\n", state.PC, lang.Instr(r.vm.Bytecode[state.PC]))
 
 		case "restart", "r":
 			r.restartVM()
@@ -202,22 +203,22 @@ func (r *REPL) Start() {
 
 func (r *REPL) restartVM() {
 	r.vm.Stop()
-	newState := NewVmState(r.vm.bytecode, cap(r.vm.currentState.Stack), cap(r.vm.currentState.Locals))
-	newState.Strings = make([]string, len(r.vm.currentState.Strings))
-	copy(newState.Strings, r.vm.currentState.Strings)
-	r.vm.currentState = newState
-	r.vm.history = make([]*VMState, 0)
+	newState := lang.NewVmState(r.vm.Bytecode, cap(r.vm.CurrentState.Stack), cap(r.vm.CurrentState.Locals))
+	newState.Strings = make([]string, len(r.vm.CurrentState.Strings))
+	copy(newState.Strings, r.vm.CurrentState.Strings)
+	r.vm.CurrentState = newState
+	r.vm.History = make([]*lang.VMState, 0)
 	r.vm.Run()
-	<-r.vm.stateChan
+	<-r.vm.StateChan
 }
 
-func (r *REPL) printState(state *VMState) {
+func (r *REPL) printState(state *lang.VMState) {
 	if state == nil {
 		fmt.Println("\033[31mProgram finished execution\033[0m")
 		return
 	}
 
-	if r.vm.currentState.PC >= len(r.vm.bytecode) {
+	if r.vm.CurrentState.PC >= len(r.vm.Bytecode) {
 		fmt.Println("\033[31mProgram finished execution\033[0m")
 		return
 	}
@@ -225,19 +226,19 @@ func (r *REPL) printState(state *VMState) {
 	fmt.Printf("\033[1;34mLine %d\033[0m, \033[1;35mPC: %d\033[0m (\033[1;33mInstruction: %s\033[0m)\n",
 		state.SourceLine,
 		state.PC,
-		Instr(r.vm.bytecode[state.PC]))
+		lang.Instr(r.vm.Bytecode[state.PC]))
 	fmt.Printf("\033[1;32mStack:\033[0m %s\n", r.formatStack(state.Stack))
 	fmt.Printf("\033[1;36mLocals:\033[0m %s\n", r.formatStack(state.Locals))
 }
 
-func (r *REPL) formatStack(stack []Value) string {
+func (r *REPL) formatStack(stack []lang.Value) string {
 	var values []string
 	for _, v := range stack {
 		switch val := v.(type) {
-		case IntValue:
+		case lang.IntValue:
 			values = append(values, fmt.Sprintf("%d", val))
-		case StringValue:
-			values = append(values, fmt.Sprintf("%q", r.vm.currentState.Strings[val.Index]))
+		case lang.StringValue:
+			values = append(values, fmt.Sprintf("%q", r.vm.CurrentState.Strings[val.Index]))
 		default:
 			values = append(values, fmt.Sprintf("%v", v))
 		}
@@ -251,21 +252,20 @@ func (r *REPL) loadFile(filename string) error {
 		return fmt.Errorf("error reading file: %v", err)
 	}
 
-	parser := participle.MustBuild[Program](participle.Lexer(basicLexer))
-	program, err := parser.ParseString(filename, string(source))
+	program, err := lang.Parse(filename, string(source))
 	if err != nil {
-		return fmt.Errorf("parse error: %v", err)
+		return err
 	}
 
-	r.compiler = NewCompiler()
-	bytecode, err := r.compiler.compileProgram(program)
+	r.compiler = lang.NewCompiler()
+	bytecode, err := r.compiler.CompileProgram(program)
 	if err != nil {
 		return fmt.Errorf("compilation error: %v", err)
 	}
 
 	// Create new VM with the compiled bytecode
-	r.vm = NewVM(bytecode, 1024, 1024, true)
-	RegisterBuiltins(r.vm)
+	r.vm = lang.NewVM(bytecode, 1024, 1024, true)
+	lang.RegisterBuiltins(r.vm)
 
 	// Register source map from compiler
 	for pc, line := range r.compiler.GetSourceMap() {
@@ -273,7 +273,7 @@ func (r *REPL) loadFile(filename string) error {
 	}
 
 	// Register the strings from the compiler
-	r.vm.RegisterStrings(r.compiler.strings)
+	r.vm.RegisterStrings(r.compiler.Strings)
 
 	// Set initial breakpoint at first line
 	r.vm.SetLineBreakpoint(1, true)
@@ -354,7 +354,7 @@ func (r *REPL) interactiveSource() {
 }
 
 // Add render method for SourceView
-func (v *SourceView) render(vm *VM) {
+func (v *SourceView) render(vm *lang.VM) {
 	for i, line := range v.lines {
 		lineNum := i + 1
 		lineNumStr := fmt.Sprintf("%*d", v.maxWidth, lineNum)
