@@ -1,2 +1,2 @@
 val name = "Hady"
-print("Hello, ", name)
+print("Hello, " name)

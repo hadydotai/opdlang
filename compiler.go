@@ -36,9 +36,8 @@ type Statement struct {
 }
 
 type Assignment struct {
-	Pos      lexer.Position
-	Variable string `"val" @Ident "="`
-	Expr     *Expr  `@@`
+	Variable string
+	Expr     *Expr
 }
 
 // First, let's define precedence levels for our operators
@@ -145,16 +144,29 @@ func (t *Term) Parse(lex *lexer.PeekingLexer) error {
 	token := lex.Peek()
 	if token == nil {
 		return fmt.Errorf("unexpected end of input")
+		// return NewSyntaxError(
+		// 	lexer.Position{Line: 1, Column: 1}, // Use actual position if available
+		// 	"",                                 // Source will be filled in by the compiler
+		// 	"unexpected end of input",
+		// 	"expected a number, string, variable name, or expression",
+		// )
 	}
 
 	switch token.Type {
 	case lexer.TokenType(basicLexer.Symbols()["Int"]):
-		lex.Next() // Consume the token
+		lex.Next()
 		num, err := strconv.Atoi(token.Value)
 		if err != nil {
-			return err
+			return fmt.Errorf("invalid integer literal: %s", token.Value)
+			// return NewSyntaxError(
+			// 	token.Pos,
+			// 	"", // Source will be filled in
+			// 	fmt.Sprintf("invalid integer literal: %s", token.Value),
+			// 	"make sure the number is a valid integer",
+			// )
 		}
-		t.Number = &num
+		numInt := int64(num)
+		t.Number = &numInt
 
 	case lexer.TokenType(basicLexer.Symbols()["String"]):
 		lex.Next() // Consume the token
@@ -165,26 +177,17 @@ func (t *Term) Parse(lex *lexer.PeekingLexer) error {
 		// Look ahead to see if this is a function call
 		next := lex.Peek()
 		if next != nil && next.Value == "(" {
-			// Parse function call
-			call := &Call{Function: token.Value}
-			call.Pos = token.Pos
 			lex.Next() // Consume '('
-
-			// Parse arguments
-			for {
-				next = lex.Peek()
-				if next == nil {
-					return fmt.Errorf("unexpected end of input in function call")
-				}
-				if next.Value == ")" {
-					lex.Next() // Consume ')'
-					break
-				}
-				if len(call.Args) > 0 {
-					if next.Value != "," {
-						return fmt.Errorf("expected ',' between arguments")
-					}
-					lex.Next() // Consume ','
+			_, cur := lex.PeekAny(func(t lexer.Token) bool {
+				return t.Value == ")"
+			})
+			tokens := lex.Range(lex.RawCursor(), cur)
+			lex.FastForward(cur)
+			call := &Call{Function: token.Value, Pos: token.Pos}
+			call.Args = make([]*Expr, 0)
+			for _, t := range tokens {
+				if t.Value == "," {
+					continue
 				}
 				arg := &Expr{}
 				if err := arg.Parse(lex); err != nil {
@@ -194,7 +197,6 @@ func (t *Term) Parse(lex *lexer.PeekingLexer) error {
 			}
 			t.Call = call
 		} else {
-			// It's a variable
 			t.Variable = &token.Value
 		}
 
@@ -207,16 +209,26 @@ func (t *Term) Parse(lex *lexer.PeekingLexer) error {
 			}
 			next := lex.Peek()
 			if next == nil || next.Value != ")" {
-				return fmt.Errorf("expected closing parenthesis")
+				return fmt.Errorf("expected closing parenthesis, got %s", next.Value)
+				// return NewSyntaxError(
+				// 	token.Pos,
+				// 	"",
+				// 	fmt.Sprintf("expected closing parenthesis, got %s", next.Value),
+				// 	"expected closing parenthesis",
+				// )
 			}
 			lex.Next() // Consume ')'
 			t.SubExpr = expr
-		} else {
-			return fmt.Errorf("unexpected token: %s", token.Value)
 		}
 
 	default:
-		return fmt.Errorf("unexpected token type: %v", token.Type)
+		return fmt.Errorf("unexpected token: %s", token.Value)
+		// return NewSyntaxError(
+		// 	token.Pos,
+		// 	"",
+		// 	fmt.Sprintf("unexpected token: %s", token.Value),
+		// 	"",
+		// )
 	}
 
 	return nil
@@ -332,11 +344,12 @@ func (c *Compiler) compileExpr(expr *Expr) error {
 }
 
 type Term struct {
-	Number   *int    `  @Int`
-	String   *string `| @String`
-	Call     *Call   `| @@`
-	Variable *string `| @Ident`
-	SubExpr  *Expr   `| "(" @@ ")"`
+	Number   *int64
+	Float    *float64
+	String   *string
+	Call     *Call
+	Variable *string
+	SubExpr  *Expr
 }
 
 type Call struct {
@@ -533,7 +546,7 @@ func (c *Compiler) compileProgram(program *Program) ([]byte, error) {
 func (c *Compiler) compileStatement(stmt *Statement) error {
 	switch {
 	case stmt.Assignment != nil:
-		c.registerLine(stmt.Assignment.Pos)
+		// c.registerLine(stmt.Assignment.Pos)
 		if err := c.compileExpr(stmt.Assignment.Expr); err != nil {
 			return err
 		}

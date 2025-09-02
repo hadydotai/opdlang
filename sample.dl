@@ -1,6 +1,5 @@
-val name = "Hady"
-val year_of_birth = 1990
-val this_year     = 2025
-print("Hello, ", name, "\n")
-print("-------------------\n")
-print("Age: ", this_year - year_of_birth, "\n")
+// val x = 1
+
+if x == 1 do
+  val y = 2 // doesn't support the rest of the statements in the blocks yet
+end
