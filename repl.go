@@ -92,7 +92,6 @@ Available Commands:
   quit, q          Exit debugger
 
 Tips:
-  - Use Tab for command completion
   - Use Up/Down arrows for command history
   - Ctrl+A to move to start of line
   - Ctrl+E to move to end of line
