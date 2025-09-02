@@ -8,9 +8,10 @@ import (
 )
 
 type CompileCommand struct {
-	Output string `short:"o" long:"output" description:"Output file and path of the compiled bytecode file" required:"yes"`
-	Run    bool   `short:"r" long:"run" description:"Run the compiled bytecode file"`
-	Args   struct {
+	Output       string `short:"o" long:"output" description:"Output file and path of the compiled bytecode file" required:"yes"`
+	DumpBytecode bool   `short:"d" long:"dump" description:"Dump a visual analysis of the bytecode for inspection"`
+	Run          bool   `short:"r" long:"run" description:"Run the compiled bytecode file"`
+	Args         struct {
 		Files []string `positional-arg-name:"FILES" required:"yes"`
 	} `positional-args:"yes"`
 }
@@ -49,6 +50,10 @@ func (cmd *CompileCommand) Execute(args []string) error {
 	if cmd.Run {
 		logging.Log(logging.LogLevelInfo, "Running compiled output")
 		runBytecode(compiler)
+	}
+
+	if cmd.DumpBytecode {
+		compiler.DebugPrint()
 	}
 	return nil
 }
